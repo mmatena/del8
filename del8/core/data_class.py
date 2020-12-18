@@ -18,8 +18,6 @@ SerializationType = serialization.SerializationType
 class _NonceDataSuperClass(object):
     """Used purely for the purposes of the `is_data_instance` function."""
 
-    pass
-
 
 def data_class():
     def dec(cls):
@@ -46,6 +44,19 @@ def data_class():
                         a: getattr(self, a) for a in self.data_class_attr_names
                     },
                 }
+
+            def copy(self, **attr_overrides):
+                # Volatile state (attributes beginning with an underscore) is not copied.
+                # The copy is also shallow.
+                for key in attr_overrides.keys():
+                    if key.startswith("_"):
+                        raise ValueError(
+                            f"Keyword argument {key} should represent an attribute "
+                            "but starts with an underscore."
+                        )
+                kwargs = {a: getattr(self, a) for a in self.data_class_attr_names}
+                kwargs.update(**attr_overrides)
+                return self.__class__(**kwargs)
 
         return DataClass
 

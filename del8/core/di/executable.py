@@ -30,8 +30,6 @@ def _get_user_defined_public_methods(cls):
 class _NonceExecutableSuperClass(object):
     """Used purely for the purposes of the `is_executable_instance` function."""
 
-    pass
-
 
 def _create_default_binding_specs(default_bindings):
     if not default_bindings:
@@ -98,6 +96,7 @@ def _wrap_public_method(fn, scope=None, default_bindings=None, skip_first=True):
 
 
 def executable(
+    *,
     apt_get_packages: Sequence[str] = None,
     pip_packages: Sequence[str] = None,
     # To get around potentially circular dependency issues, users can
