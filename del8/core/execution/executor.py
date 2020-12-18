@@ -7,7 +7,9 @@ from .. import data_class
 @data_class.data_class()
 class ExecutionItem(object):
     # TODO: Add some attributes here.
-    def __init__(self):
+    def __init__(self, run_kwargs):
+        # `run_kwargs` is a Dict[str, Any] that form the complete kwargs for a
+        # call to `del8.core.execution.entrypoint.worker_run(**run_kwargs)`.
         pass
 
 

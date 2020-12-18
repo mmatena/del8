@@ -3,6 +3,18 @@ import abc
 import uuid as uuidlib
 
 
+class StorageParams(abc.ABC):
+    # NOTE: Subclasses should also probably be @data_class.
+
+    @abc.abstractmethod
+    def instantiate_storage(self):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_storage_cls(self):
+        raise NotImplementedError
+
+
 class Storage(abc.ABC):
     # NOTE: Subclasses should also probably be @executable.
 

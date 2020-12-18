@@ -169,8 +169,3 @@ def get_user_defined_public_methods(cls, superclass=object):
             continue
         ret[key] = value
     return ret
-
-
-def islambda(possible_lambda):
-    """Sees if a variable is lambda function."""
-    return callable(possible_lambda) and possible_lambda.__name__ == "<lambda>"

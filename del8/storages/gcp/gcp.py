@@ -20,7 +20,7 @@ BLOBS_TABLE = "Blobs"
 
 
 @data_class.data_class()
-class GcpStorageParams(object):
+class GcpStorageParams(storage.StorageParams):
     # The defaults are for prod and a vast executor.
     def __init__(
         self,
@@ -36,6 +36,12 @@ class GcpStorageParams(object):
         bucket_name="del8_blobs",
     ):
         pass
+
+    def instantiate_storage(self):
+        return GcpStorage.from_params(self)
+
+    def get_storage_cls(self):
+        raise GcpStorage
 
     @property
     def _directory(self):
@@ -60,33 +66,12 @@ class GcpStorageParams(object):
         return os.path.join(self._directory, self.private_key_file)
 
 
-@executable.executable()
-def _default_params(
-    environment_mode="prod",
-):
-    prod_params = GcpStorageParams()
-    if environment_mode == "prod":
-        return prod_params
-    elif environment_mode == "dev":
-        return prod_params.copy(
-            # Be sure that entries in the dev directory point to the
-            # dev resources.
-            client_directory="~/del8/dev/gcp/vast",
-            bucket_name="dev_del8_blobs",
-        )
-    else:
-        raise ValueError(f"Unrecognized environment mode: {environment_mode}.")
-
-
 @executable.executable(
     pip_packages=[
         "google-auth",
         "google-cloud-storage",
         "psycopg2-binary",
     ],
-    default_bindings={
-        "gcp_params": _default_params,
-    },
 )
 class GcpStorage(storage.Storage):
     def __init__(
@@ -98,10 +83,29 @@ class GcpStorage(storage.Storage):
         # Need to set these probably through some context manager.
         self._experiment_group_uuid = experiment_group_uuid
         self._experiment_run_uuid = experiment_run_uuid
-        self._gcp_params = gcp_params
+        self._gcp_params = self.params_by_environment_mode(gcp_params)
 
         self._conn = None
         self._bucket = None
+
+    def params_by_environment_mode(
+        self,
+        prod_params,
+        environment_mode="prod",
+        dev_client_directory="~/del8/dev/gcp/vast",
+        dev_bucket_name="dev_del8_blobs",
+    ):
+        if environment_mode == "prod":
+            return prod_params
+        elif environment_mode == "dev":
+            return prod_params.copy(
+                # Be sure that entries in the dev directory point to the
+                # dev resources.
+                client_directory=dev_client_directory,
+                bucket_name=dev_bucket_name,
+            )
+        else:
+            raise ValueError(f"Unrecognized environment mode: {environment_mode}.")
 
     #################
 
@@ -186,7 +190,7 @@ class GcpStorage(storage.Storage):
         return self._experiment_run_uuid
 
     def get_experiment_group_uuid(self):
-        return self._experiment_group_uuid.get_uuid()
+        return self._experiment_group_uuid
 
     #################
 

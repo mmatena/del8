@@ -240,4 +240,6 @@ def binding_by_name_scope(name, binding):
 
 
 def default_binding_specs_scope(binding_specs):
+    # NOTE: Probably should not be used for any reason except for the
+    # the default bindings on executable classes.
     return CONTEXT.default_binding_specs_scope(binding_specs)

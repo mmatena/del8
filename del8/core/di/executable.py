@@ -5,6 +5,7 @@ from typing import Any, Dict, Sequence
 import inspect
 
 from ..utils import decorator_util as dec_util
+from ..utils import type_util
 from . import scopes
 
 
@@ -36,8 +37,14 @@ def _create_default_binding_specs(default_bindings):
         return []
     binding_specs = []
     for name, binding in default_bindings.items():
-        if dec_util.islambda(binding):
+        if type_util.islambda(binding):
             binding = binding()
+            if is_executable_instance(binding):
+                raise TypeError(
+                    "Please do not use lambdas to inject executable instances. "
+                    "The lambdas were intended only to get around circular dependency "
+                    "issues when injecting classes."
+                )
         binding_specs.append(scopes.ArgNameBindingSpec(name, binding))
     # Make immutable.
     return tuple(binding_specs)
@@ -46,12 +53,8 @@ def _create_default_binding_specs(default_bindings):
 def _get_default_binding_specs(cls, default_bindings):
     # Ensures that the binding specs are (lazily) initialized, and makes sure
     # that the initialization only happens once per class.
-    if not hasattr(cls, "_default_binding_specs"):
-        setattr(
-            cls,
-            "_default_binding_specs",
-            _create_default_binding_specs(default_bindings),
-        )
+    if cls._default_binding_specs is None:
+        cls._default_binding_specs = (_create_default_binding_specs(default_bindings),)
     return cls._default_binding_specs
 
 
@@ -114,6 +117,15 @@ def executable(
 
         @dec_util.wraps_class(cls)
         class Executable(cls, _NonceExecutableSuperClass):
+            _apt_get_packages = tuple(apt_get_packages)
+            _pip_packages = tuple(pip_packages)
+            _default_bindings = default_bindings
+
+            # Will be filled in at the first wrapped instance call. We do this
+            # to get around circular dependency issues.
+            # NOTE: See if we actually need to do this.
+            _default_binding_specs = None
+
             __init__ = _wrap_public_method(
                 cls.__init__, default_bindings=default_bindings
             )
@@ -139,3 +151,7 @@ def executable(
 
 def is_executable_instance(instance):
     return isinstance(instance, _NonceExecutableSuperClass)
+
+
+def is_executable_class(klass):
+    return issubclass(klass, _NonceExecutableSuperClass)
