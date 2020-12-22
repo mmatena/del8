@@ -6,9 +6,9 @@ from absl import app
 from absl import flags
 from absl import logging
 
-from exps.exps.core import entrypoint
-from exps.exps.core import serialization
-from exps.exps.core.execution.vastai import messages
+from del8.core import serialization
+from del8.core.execution import entrypoint
+from del8.executors.vastai import messages
 
 FLAGS = flags.FLAGS
 
@@ -37,10 +37,12 @@ def main(_):
 
                     if msg.type == messages.MessageType.PROCESS_ITEM:
                         exe_item = msg.content.execution_item
+                        if isinstance(exe_item, str):
+                            exe_item = serialization.deserialize(exe_item)
 
                         # TODO: Exception handling
                         # logging.warning("Not processing anything for testing purposes. Uncomment the line.")
-                        entrypoint.worker_run(**exe_item.run_kwargs)
+                        entrypoint.worker_run(**exe_item.worker_run_kwargs)
 
                         response = messages.Message(
                             type=messages.MessageType.PROCESS_ITEM,

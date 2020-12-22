@@ -1,5 +1,6 @@
 """TODO: Add title."""
 import abc
+import inspect
 
 from . import executable
 from ..utils import type_util
@@ -15,7 +16,7 @@ def _extract_exe_cls(binding):
 
     if executable.is_executable_instance(binding):
         return binding.__class__
-    elif executable.is_executable_class(binding):
+    elif inspect.isclass(binding) and executable.is_executable_class(binding):
         return binding
     return None
 
@@ -61,7 +62,7 @@ def get_all_apt_get_packages(all_executable_classes):
     apt_get_packages = set()
     for exe_cls in all_executable_classes:
         assert executable.is_executable_class(exe_cls), "Expecting @executable."
-        apt_get_packages.add_all(exe_cls._apt_get_packages)
+        apt_get_packages |= set(exe_cls._apt_get_packages)
     return sorted(apt_get_packages)
 
 
@@ -69,5 +70,5 @@ def get_all_pip_packages(all_executable_classes):
     pip_packages = set()
     for exe_cls in all_executable_classes:
         assert executable.is_executable_class(exe_cls), "Expecting @executable."
-        pip_packages.add_all(exe_cls._pip_packages)
+        pip_packages |= set(exe_cls._pip_packages)
     return sorted(pip_packages)

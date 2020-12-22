@@ -8,14 +8,14 @@ import inspect
 # can probably write our own version so we need fewer dependencies.
 from pinject import copy_args_to_public_fields
 
-from .util import decorator_util as dec_util
+from .utils import decorator_util as dec_util
 from . import serialization
 
 
 SerializationType = serialization.SerializationType
 
 
-class _NonceDataSuperClass(object):
+class _DataClassABC(object):
     """Used purely for the purposes of the `is_data_instance` function."""
 
 
@@ -30,7 +30,7 @@ def data_class():
         attributes_names = [p.name for p in attributes]
 
         @dec_util.wraps_class(cls)
-        class DataClass(cls, _NonceDataSuperClass):
+        class DataClass(cls, _DataClassABC):
             data_class_attrs = attributes
             data_class_attr_names = attributes_names
 
@@ -64,4 +64,4 @@ def data_class():
 
 
 def is_data_instance(instance):
-    return isinstance(instance, _NonceDataSuperClass)
+    return isinstance(instance, _DataClassABC)

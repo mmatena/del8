@@ -15,88 +15,10 @@ from .vast_api import api as vast_api
 ##############################################################################
 
 
-# def http_backoff(
-#     status_code,
-#     *,
-#     # These just provide the default values. You can override on each function
-#     # call if needed.
-#     linear_backoff_steps=5,
-#     linear_interval_secs=5,
-#     exp_backoff_steps=4,
-#     exp_start_interval_secs=5,
-#     exp_backoff_base=2,
-#     backoff_noise_ms=50,
-# ):
-
-#     def decorator(fn):
-#         @functools.wraps(fn)
-#         def inner(
-#             *args,
-#             # The `no_backoff` arg is useful when we put this wrapper on a
-#             # function that calls another function with its own backoff and
-#             # don't want to double up the backoffs while being able to control
-#             # the backoffs via passed arguments for the outer function.
-#             no_backoff=False,
-#             linear_backoff_steps=linear_backoff_steps,
-#             linear_interval_secs=linear_interval_secs,
-#             exp_backoff_steps=exp_backoff_steps,
-#             exp_start_interval_secs=exp_start_interval_secs,
-#             exp_backoff_base=exp_backoff_base,
-#             backoff_noise_ms=backoff_noise_ms,
-#             **kwargs,
-#         ):
-#             if no_backoff:
-#                 intervals = []
-#             else:
-#                 intervals = [
-#                     linear_interval_secs * i for i in range(linear_backoff_steps)
-#                 ] + [
-#                     exp_start_interval_secs * exp_backoff_base ** i
-#                     for i in range(exp_backoff_steps)
-#                 ]
-
-#             attempts = 0
-#             total_secs_waited = 0
-
-#             while True:
-#                 try:
-#                     return fn(*args, **kwargs)
-
-#                 except requests.exceptions.HTTPError as e:
-#                     attempts += 1
-#                     if not intervals:
-#                         if not no_backoff:
-#                             logging.warning(
-#                                 f"Unable to call {fn.__name__} without producing "
-#                                 f"an HTTPError with status code {status_code}. We "
-#                                 f"had a total of {attempts} attempts with a cumulative "
-#                                 f"total of {total_secs_waited} seconds waited between attempts."
-#                             )
-#                         raise e
-
-#                     if e.response.status_code == status_code:
-#                         interval = intervals.pop(0)
-#                         logging.info(
-#                             f"Received HTTPError with status code {status_code} from a call "
-#                             f"to {fn.__name__}. Trying again in {interval} seconds."
-#                         )
-#                         total_secs_waited += interval
-
-#                         noise = (random.random() - 0.5) * backoff_noise_ms / 1000
-#                         time.sleep(interval + noise)
-#                     else:
-#                         raise e
-#             raise Exception("If we get here, then there is a bug in the code.")
-
-#         return inner
-
-#     return decorator
-
-
-_bad_gateway_backoff = functools.partial(
+_http_500_backoff = functools.partial(
     backoffs.linear_to_exp_backoff,
     exceptions_to_catch=(requests.exceptions.HTTPError,),
-    should_retry_on_exception_fn=lambda e: e.response.status_code == 502,
+    should_retry_on_exception_fn=lambda e: 500 <= e.response.status_code < 600,
 )
 
 
@@ -160,7 +82,7 @@ class VastInstance(object):
 ##############################################################################
 
 
-@_bad_gateway_backoff()
+@_http_500_backoff()
 def query_offers(vast_params):
     query_str = vast_params.get_queries_str()
     order_str = vast_params.offer_query.order_str
@@ -175,7 +97,7 @@ def query_offers(vast_params):
     return [VastOffer(r) for r in results]
 
 
-@_bad_gateway_backoff()
+@_http_500_backoff()
 def create_instance(
     instance_id,
     vast_params,
@@ -206,14 +128,14 @@ def create_instance(
     return uuid
 
 
-@_bad_gateway_backoff()
+@_http_500_backoff()
 def get_all_instances():
     # Instances means that I'm the one running them.
     instances = vast_api.get_instances()
     return [VastInstance(instance) for instance in instances]
 
 
-@_bad_gateway_backoff()
+@_http_500_backoff()
 def get_instance_by_uuid(instance_uuid):
     # Instance means that I'm running it.
     for instance in get_all_instances(no_backoff=True):
@@ -222,7 +144,7 @@ def get_instance_by_uuid(instance_uuid):
     raise Exception(f"Instance with uuid {instance_uuid} not found.")
 
 
-@_bad_gateway_backoff()
+@_http_500_backoff()
 def destroy_instance_by_vast_instance_id(vast_instance_id):
     response = vast_api.destroy_instance(vast_instance_id)
     if not response["success"]:

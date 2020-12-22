@@ -28,13 +28,13 @@ def _get_user_defined_public_methods(cls):
     }
 
 
-class _NonceExecutableSuperClass(object):
+class _ExecutableABC(object):
     """Used purely for the purposes of the `is_executable_instance` function."""
 
 
 def _create_default_binding_specs(default_bindings):
     if not default_bindings:
-        return []
+        return ()
     binding_specs = []
     for name, binding in default_bindings.items():
         if type_util.islambda(binding):
@@ -54,7 +54,7 @@ def _get_default_binding_specs(cls, default_bindings):
     # Ensures that the binding specs are (lazily) initialized, and makes sure
     # that the initialization only happens once per class.
     if cls._default_binding_specs is None:
-        cls._default_binding_specs = (_create_default_binding_specs(default_bindings),)
+        cls._default_binding_specs = _create_default_binding_specs(default_bindings)
     return cls._default_binding_specs
 
 
@@ -100,8 +100,8 @@ def _wrap_public_method(fn, scope=None, default_bindings=None, skip_first=True):
 
 def executable(
     *,
-    apt_get_packages: Sequence[str] = None,
-    pip_packages: Sequence[str] = None,
+    apt_get_packages: Sequence[str] = (),
+    pip_packages: Sequence[str] = (),
     # To get around potentially circular dependency issues, users can
     # provide a binding in the form of a zero-argument lambda function
     # that returns the binding. Note that it MUST be a lambda function;
@@ -112,14 +112,22 @@ def executable(
     # the circular dependency issue.
     default_bindings: Dict[str, Any] = None,
 ):
+    if default_bindings is None:
+        default_bindings = {}
+
     def dec(cls_or_fn):
         cls = _ensure_exec_cls(cls_or_fn)
 
         @dec_util.wraps_class(cls)
-        class Executable(cls, _NonceExecutableSuperClass):
+        class Executable(cls, _ExecutableABC):
             _apt_get_packages = tuple(apt_get_packages)
             _pip_packages = tuple(pip_packages)
             _default_bindings = default_bindings
+
+            # NOTE: This only needed due to @data_class having a dependency on pinject.
+            # We only use a single function unrelated to anything specific to pinject.
+            # Once we remove that, we remove this.
+            _pip_packages += ("pinject",)
 
             # Will be filled in at the first wrapped instance call. We do this
             # to get around circular dependency issues.
@@ -150,8 +158,8 @@ def executable(
 
 
 def is_executable_instance(instance):
-    return isinstance(instance, _NonceExecutableSuperClass)
+    return isinstance(instance, _ExecutableABC)
 
 
 def is_executable_class(klass):
-    return issubclass(klass, _NonceExecutableSuperClass)
+    return issubclass(klass, _ExecutableABC)

@@ -1,5 +1,4 @@
 """TODO: Add title."""
-import abc
 
 
 def islambda(possible_lambda):
@@ -10,4 +9,15 @@ def islambda(possible_lambda):
 def isiterable(possible_iterable):
     # NOTE: This might not be the best way to check for iterables. Google
     # it for more details.
-    return isinstance(possible_iterable, abc.Iterable)
+    if isinstance(possible_iterable, str):
+        # My main use of this is to convert non-lists to singleton lists, so
+        # I want to be able to have lists of strings.
+        return False
+    return isinstance(possible_iterable, (list, tuple, set))
+
+
+def ensure_iterable(possible_iterable):
+    if isiterable(possible_iterable):
+        return possible_iterable
+    else:
+        return [possible_iterable]

@@ -2,7 +2,6 @@
 from concurrent import futures
 import logging as pylogging
 from multiprocessing import connection
-import os
 import queue
 import time
 
@@ -45,6 +44,10 @@ class VastExecutorParams(object):
         instance_params,
         num_workers: int,
         storage_params=None,
+        # NOTE: This will be the entire worker on start command. It will not be
+        # added to some other on start command; again, it will form the entire
+        # on start command.
+        entire_on_start_cmd=None,
     ):
         pass
 
@@ -52,7 +55,12 @@ class VastExecutorParams(object):
         return self.offer_query.get_queries_str(self.instance_params)
 
     def create_onstart_cmd(self):
+        if self.entire_on_start_cmd:
+            return self.entire_on_start_cmd
         return onstart_util.create_onstart_cmd(self)
+
+    def create_supervisor(self):
+        return VastSupervisor.from_params(self)
 
 
 @data_class.data_class()
@@ -80,11 +88,21 @@ class InstanceParams(object):
         # Usually should not be set. Will use the default if None.
         worker_main=DEFAULT_WORKER_MAIN,
         remote_port: int = 6464,
-        worker_logs_dir="~/.del8_worker_logs",
+        worker_logs_dir="~/del8_worker_logs",
         apt_get_packages: Sequence[str] = (),
         pip_packages: Sequence[str] = (),
         pip_binary="pip3",
         python_binary="python3",
+        # TODO: Make the image configurable somewhere
+        #
+        # The vast ai images are very out of date. Do not use them.
+        # Use the tensorflow/pytorch ones instead.
+        #
+        # Also don't use the latest- tagged images. I think they change,
+        # and I've gotten stuff broken as new ones are pushed. Also the
+        # vast ai workers have to download the images when they change,
+        # which takes time and costs money in downloads.
+        image="tensorflow/tensorflow:2.3.0-gpu",
     ):
         # Ensure that project params is stored as a sequence.
         if not self.project_params:
@@ -93,26 +111,45 @@ class InstanceParams(object):
             self.project_params = [self.project_params]
 
 
-@data_class.data_class()
-class ProjectParams(object):
-    DEFAULT_EXCLUDES = (
-        r".*/__pycache__$",
-        r".*/\.git$",
+###############################################################################
+
+
+def create_supervisor_params(experiment, *, num_workers, offer_query, disk_gb):
+    execution_items = experiment.create_all_execution_items()
+
+    all_binding_specs = set()
+    for exe_item in execution_items:
+        # NOTE: Not including anything from the init_kwargs or call_kwargs. It
+        # is the user's job to include that in the experiment or group's
+        # extra_apt_get_packages and extra_pip_packages properties.
+        all_binding_specs |= set(exe_item.worker_run_kwargs["global_binding_specs"])
+    all_binding_specs = list(all_binding_specs)
+
+    return VastExecutorParams(
+        num_workers=num_workers,
+        storage_params=experiment.get_storage_params(),
+        offer_query=offer_query,
+        instance_params=InstanceParams(
+            disk_gb=disk_gb,
+            project_params=experiment.get_all_project_params(),
+            **experiment.get_all_package_kwargs(all_binding_specs),
+        ),
     )
 
-    def __init__(
-        self,
-        folder_path: str,
-        extra_excludes: Sequence[str] = (),
-    ):
-        pass
 
-    def get_excludes(self):
-        return tuple(self.extra_excludes) + self.DEFAULT_EXCLUDES
+def launch_experiment(experiment, *, num_workers, offer_query, disk_gb):
+    execution_items = experiment.create_all_execution_items()
 
-    def get_folder_name(self):
-        source_dir = os.path.expanduser(self.folder_path)
-        return os.path.basename(source_dir)
+    vast_params = create_supervisor_params(
+        experiment,
+        num_workers=num_workers,
+        offer_query=offer_query,
+        disk_gb=disk_gb,
+    )
+
+    sup = VastSupervisor.from_params(vast_params)
+    sup.run(execution_items)
+    return sup
 
 
 ###############################################################################
@@ -160,6 +197,7 @@ class VastSupervisor(executor.Supervisor):
     def _launch_worker(self):
         handle = self._worker_launcher.launch()
         self._worker_handles.add(handle)
+        return handle
 
     def _run(self, execution_items):
         not_done = set()
@@ -184,6 +222,8 @@ class VastSupervisor(executor.Supervisor):
                 )
             handle = list(done)[0].result()
             state = handle.state
+
+            logging.info(f"Worker state: {state}")
 
             if state == _WorkerStates.INITIALIZING:
                 submit_to_pool(handle.wait_for_connection)
@@ -245,7 +285,7 @@ class VastWorkerHandle(executor.WorkerHandle):
         self.state = _WorkerStates.UNSTARTED
 
     def start(self):
-        self.state = self.States.INITIALIZING
+        self.state = _WorkerStates.INITIALIZING
         self._instance = None
         self._tunnel = None
 
@@ -257,31 +297,32 @@ class VastWorkerHandle(executor.WorkerHandle):
         return self
 
     def kill(self):
+        # logging.fatal("NOT KILLING WORKER FOR TESTING. UNCOMMENT ASAP.")
         if self._instance:
             api_wrapper.destroy_instance_by_vast_instance_id(
                 self._instance.get_instance_id()
             )
         elif self._uuid:
             api_wrapper.destroy_instance_by_uuid(self._uuid)
-        self.state = self.States.KILLED
+        self.state = _WorkerStates.KILLED
         logging.info("Killed worker.")
         return self
 
     def wait_for_connection(self):
-        assert self.state == self.States.INITIALIZING
+        assert self.state == _WorkerStates.INITIALIZING
         # NOTE: Not sure if this sleep is necessary.
         time.sleep(5)
         if self._can_connect():
             self._connect()
-            self.state = self.States.ACCEPTING
+            self.state = _WorkerStates.ACCEPTING
         return self
 
     def _can_connect(self):
-        assert self.state == self.States.INITIALIZING
+        assert self.state == _WorkerStates.INITIALIZING
         self._instance = api_wrapper.get_instance_by_uuid(self._uuid)
         return self._instance.is_running() and self._instance.get_ssh_address()
 
-    def _is_tunnel_good_to_go(self, _):
+    def _is_tunnel_good_to_go(self):
         if not self._tunnel:
             return False
         self._tunnel.check_tunnels()
@@ -300,7 +341,7 @@ class VastWorkerHandle(executor.WorkerHandle):
         linear_backoff_steps=60,
     )
     def _connect(self):
-        assert self.state == self.States.INITIALIZING
+        assert self.state == _WorkerStates.INITIALIZING
 
         ssh_address = self._instance.get_ssh_address()
         remote_port = self._vast_params.instance_params.remote_port
@@ -326,10 +367,28 @@ class VastWorkerHandle(executor.WorkerHandle):
         self._conn = connection.Client(("127.0.0.1", self._tunnel.local_bind_port))
 
     def accept_item(self, item):
-        assert self.state == self.States.ACCEPTING
+        assert self.state == _WorkerStates.ACCEPTING
         assert item is not None
-
-        self.state = self.States.PROCESSING
+        #
+        #
+        #
+        #
+        #
+        #
+        #
+        #
+        #
+        return self
+        #
+        #
+        #
+        #
+        #
+        #
+        #
+        #
+        #
+        self.state = _WorkerStates.PROCESSING
 
         msg = messages.Message(
             type=messages.MessageType.PROCESS_ITEM,
@@ -350,14 +409,16 @@ class VastWorkerHandle(executor.WorkerHandle):
 
         logging.info("Successfully processed an item.")
 
-        self.state = self.States.ACCEPTING
+        self.state = _WorkerStates.ACCEPTING
 
         return self
 
     def close(self):
         if self._conn:
             self._conn.close()
+            self._conn = None
         if self._tunnel:
             self._tunnel.stop()
+            self._tunnel = None
         if self.state != _WorkerStates.KILLED:
             self.kill()

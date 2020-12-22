@@ -239,7 +239,23 @@ def binding_by_name_scope(name, binding):
     return binding_scope(binding_spec)
 
 
+def binding_by_name_scopes(name_binding_pairs):
+    binding_specs = []
+    for name, binding in name_binding_pairs:
+        binding_specs.append(ArgNameBindingSpec(name, binding))
+    return binding_scope(binding_specs)
+
+
 def default_binding_specs_scope(binding_specs):
     # NOTE: Probably should not be used for any reason except for the
     # the default bindings on executable classes.
     return CONTEXT.default_binding_specs_scope(binding_specs)
+
+
+###############################################################################
+
+
+@contextlib.contextmanager
+def multiple(*scopes):
+    with contextlib.ExitStack() as stack:
+        yield [stack.enter_context(s) for s in scopes]

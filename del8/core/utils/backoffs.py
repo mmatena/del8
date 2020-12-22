@@ -41,7 +41,7 @@ def linear_to_exp_backoff(
                 intervals = []
             else:
                 intervals = [
-                    linear_interval_secs * i for i in range(linear_backoff_steps)
+                    linear_interval_secs for i in range(linear_backoff_steps)
                 ] + [
                     exp_start_interval_secs * exp_backoff_base ** i
                     for i in range(exp_backoff_steps)
