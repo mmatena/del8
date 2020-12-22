@@ -369,25 +369,6 @@ class VastWorkerHandle(executor.WorkerHandle):
     def accept_item(self, item):
         assert self.state == _WorkerStates.ACCEPTING
         assert item is not None
-        #
-        #
-        #
-        #
-        #
-        #
-        #
-        #
-        #
-        return self
-        #
-        #
-        #
-        #
-        #
-        #
-        #
-        #
-        #
         self.state = _WorkerStates.PROCESSING
 
         msg = messages.Message(

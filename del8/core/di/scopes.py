@@ -90,13 +90,6 @@ class InjectionContext(object):
                 # Return the default if the parameter has one and we were not able
                 # to find a binding.
                 return parameter.default
-            #
-            #
-            #
-            print(self._default_binding_specs_stack)
-            #
-            #
-            #
             raise e
 
     def inject_from_str(self, key_str):

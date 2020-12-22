@@ -60,7 +60,7 @@ class GceParams(object):
         self.private_ssh_key_path = os.path.expanduser(self.private_ssh_key_path)
         self.public_ssh_key_path = os.path.expanduser(self.public_ssh_key_path)
 
-    def create_deploy_ex_metadata(self):
+    def create_ex_metadata(self):
         with open(self.public_ssh_key_path, "r") as fp:
             public_key_content = fp.read().strip()
         return {
@@ -72,8 +72,18 @@ class GceParams(object):
             ]
         }
 
+    def create_ex_service_accounts(self):
+        return [
+            {
+                "email": self.service_account,
+                "scopes": ["compute", "storage-full"],
+            }
+        ]
 
-def _add_start_supervisor_script(execution_items, executor_params, launch_params):
+
+def _add_start_supervisor_script(
+    execution_items, executor_params, launch_params, instance_name
+):
     on_start_cmd = executor_params.create_onstart_cmd()
     executor_params = executor_params.copy(entire_on_start_cmd=on_start_cmd)
 
@@ -95,6 +105,8 @@ def _add_start_supervisor_script(execution_items, executor_params, launch_params
     cmd = [
         launch_params.python_binary,
         launch_params.supervisor_main,
+        f"--gce_instance_name='{instance_name}'",
+        f"--zone='{launch_params.datacenter}'",
         f"--execution_items_base64='{execution_items}'",
         f"--executor_params_base64='{executor_params}'",
         f"1>{stdout} 2>{stderr} &",
@@ -105,9 +117,8 @@ def _add_start_supervisor_script(execution_items, executor_params, launch_params
 
 
 def launch(execution_items, executor_params, launch_params):
-    # TODOs:
-    # - Fix issue of vastai supervisor not quiting once it completes so we can kill VM.
-    # - Destroy VM once done.
+    # NOTE: Maybe make this include the experiment name.
+    instance_name = f"del8-{uuidlib.uuid4().hex}"
 
     script = [
         "#!/bin/bash",
@@ -132,7 +143,9 @@ def launch(execution_items, executor_params, launch_params):
         #
         project_util.python_project_to_bash_command(project_util.DEL8_PROJECT),
         #
-        _add_start_supervisor_script(execution_items, executor_params, launch_params),
+        _add_start_supervisor_script(
+            execution_items, executor_params, launch_params, instance_name=instance_name
+        ),
     ]
     deploy = ScriptDeployment("\n".join(script))
 
@@ -152,14 +165,14 @@ def launch(execution_items, executor_params, launch_params):
     size = [s for s in driver.list_sizes() if s.name == "e2-micro"][0]
 
     node = driver.deploy_node(
-        # NOTE: Maybe make this include the experiment name.
-        name=f"del8-{uuidlib.uuid4().hex}",
+        name=instance_name,
         image=image,
         size=size,
         deploy=deploy,
         ssh_username="root",
-        ex_metadata=launch_params.create_deploy_ex_metadata(),
+        ex_metadata=launch_params.create_ex_metadata(),
         ssh_key=launch_params.private_ssh_key_path,
+        ex_service_accounts=launch_params.create_ex_service_accounts(),
     )
 
     return node, deploy
