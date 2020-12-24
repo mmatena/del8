@@ -1,8 +1,9 @@
 """TODO: Add title."""
+from absl import logging
+import tensorflow as tf
+
 from del8.core import data_class
 from del8.core.di import executable
-
-import tensorflow as tf
 
 
 ###############################################################################
@@ -31,6 +32,7 @@ class _SaveCheckpointCallback(tf.keras.callbacks.Callback):
         self.checkpoint_saver.reset()
 
     def on_epoch_end(self, epoch, logs=None):
+        logging.info("Saving checkpoint")
         self.checkpoint_saver.save_checkpoint(self.model)
 
 

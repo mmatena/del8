@@ -23,8 +23,25 @@ flags.mark_flag_as_required("execution_items_base64")
 flags.mark_flag_as_required("executor_params_base64")
 
 
-def kill_vm():
+def exit_logging(base_exit_logger_params):
+    from del8.core.logging import exit_logger
+
+    logger_params = base_exit_logger_params.copy(
+        log_object_name=os.path.join(
+            base_exit_logger_params.log_object_name, "supervisor.tar.gz"
+        )
+    )
+    try:
+        exit_logger.log(logger_params)
+        exit_logger.postprocess_stored_logs(base_exit_logger_params)
+    except Exception as e:
+        logging.exception(e)
+
+
+def kill_vm(exe_params):
     logging.info("Killing GCE VM")
+    if exe_params.base_exit_logger_params:
+        exit_logging(exe_params.base_exit_logger_params)
     # TODO: Rewrite to use subprocess.
     os.system(
         "gcloud compute instances delete --quiet "
@@ -36,22 +53,23 @@ def kill_vm():
 # bunch of nested contexts and loops. Also maybe try seeing
 # if some light server framework could be used.
 def main(_):
+    exe_items = base64.b64decode(FLAGS.execution_items_base64.encode("utf-8")).decode(
+        "utf-8"
+    )
+    exe_params = base64.b64decode(FLAGS.executor_params_base64.encode("utf-8")).decode(
+        "utf-8"
+    )
     try:
-        exe_items = base64.b64decode(
-            FLAGS.execution_items_base64.encode("utf-8")
-        ).decode("utf-8")
-        exe_params = base64.b64decode(
-            FLAGS.executor_params_base64.encode("utf-8")
-        ).decode("utf-8")
-
         exe_items = serialization.deserialize(exe_items)
         exe_params = serialization.deserialize(exe_params)
 
         supervisor = exe_params.create_supervisor()
-
         supervisor.run(exe_items)
+
+    except Exception as e:
+        logging.exception(e)
     finally:
-        kill_vm()
+        kill_vm(exe_params)
 
 
 if __name__ == "__main__":

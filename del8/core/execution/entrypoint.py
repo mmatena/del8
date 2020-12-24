@@ -1,12 +1,13 @@
 """TODO: Add title."""
 from del8.core.di import executable
 from del8.core.di import scopes
+from del8.core.storage.storage import RunState
 
 from del8.core.experiment import runs
 
 
 @executable.executable()
-def save_params_at_run_start(run_params, storage, group, experiment, run_uuid):
+def save_params_at_run_start(run_params, storage, experiment, run_uuid):
     run_key = runs.RunKey(
         # NOTE: Not sure if the uuid should be here as they are stored in the
         # same row as the serialized data.
@@ -17,6 +18,11 @@ def save_params_at_run_start(run_params, storage, group, experiment, run_uuid):
 
     storage.store_item(run_key)
     storage.store_item(run_params)
+
+
+@executable.executable()
+def set_run_state(state, storage):
+    storage.set_run_state(state)
 
 
 def worker_run(
@@ -65,6 +71,8 @@ def worker_run(
             # I'd need to think how re-usable executables that interact with storage such as
             # the checkpoint saver would work in that framework, though.
             with scopes.binding_by_name_scope("storage", storage):
+                set_run_state()(RunState.STARTED)
                 if run_params:
                     save_params_at_run_start()(run_params)
                 executable_cls(**init_kwargs)(**call_kwargs)
+                set_run_state()(RunState.FINISHED)

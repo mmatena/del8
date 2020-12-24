@@ -59,13 +59,17 @@ class training_run(object):
         split,
         train_num_examples=None,
         validation_num_examples=None,
+        train_batch_size=None,
+        validation_batch_size=None,
     ):
         if split == "train":
             shuffle = repeat = True
             num_examples = train_num_examples
+            batch_size = train_batch_size
         elif split == "validation":
             shuffle = repeat = False
             num_examples = validation_num_examples
+            batch_size = validation_batch_size
         else:
             raise ValueError(f"Unrecognized split {split}.")
         specs = [
@@ -73,6 +77,9 @@ class training_run(object):
             scopes.ArgNameBindingSpec("repeat", repeat),
             scopes.ArgNameBindingSpec("split", split),
         ]
+
+        if batch_size:
+            specs.append(scopes.ArgNameBindingSpec("batch_size", batch_size))
         if num_examples:
             specs.append(scopes.ArgNameBindingSpec("num_examples", num_examples))
 

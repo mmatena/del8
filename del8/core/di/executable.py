@@ -111,9 +111,15 @@ def executable(
     # on the issue. It is a good idea to look into other solutions to
     # the circular dependency issue.
     default_bindings: Dict[str, Any] = None,
+    only_wrap_methods=None,
 ):
     if default_bindings is None:
         default_bindings = {}
+
+    # NOTE: We do not support these any more.
+    # TODO: Remove in code.
+    apt_get_packages = ()
+    pip_packages = ()
 
     def dec(cls_or_fn):
         cls = _ensure_exec_cls(cls_or_fn)
@@ -144,6 +150,8 @@ def executable(
         # but no injection and scoping.)
         methods = _get_user_defined_public_methods(cls)
         for name, method in methods.items():
+            if only_wrap_methods and name not in only_wrap_methods:
+                continue
             setattr(
                 Executable,
                 name,

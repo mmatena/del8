@@ -19,6 +19,11 @@ class StorageParams(abc.ABC):
         raise NotImplementedError
 
 
+class RunState(object):
+    STARTED = 1
+    FINISHED = 2
+
+
 class Storage(abc.ABC):
     # NOTE: Subclasses should also probably be @executable.
 
@@ -72,6 +77,20 @@ class Storage(abc.ABC):
         # to only items associated with the respective group/experiment/run.
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def run_keys_from_partial_values(
+        self,
+        run_key_values,
+        group_uuid=None,
+        experiment_uuid=None,
+    ):
+        # All of the uuids are optional are should restrict the returns
+        # to only items associated with the respective group/experiment.
+        #
+        # The `run_key_values` can not include values in the dict to get
+        # all run keys that match the values that are there.
+        raise NotImplementedError
+
     # # Not sure if we want this method.
     # def store_tensors(self, tensors) -> str:
     #     """Returns UUID."""
@@ -102,7 +121,11 @@ class Storage(abc.ABC):
         finally:
             if file:
                 file.close()
-            os.rmtree(temp_dir)
+            shutil.rmtree(temp_dir)
+
+    @abc.abstractmethod
+    def set_run_state(self, run_state):
+        raise NotImplementedError
 
     def initialize(self):
         pass

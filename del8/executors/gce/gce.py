@@ -7,6 +7,7 @@ tail -f del8_supervisor_logs/log*
 ```
 """
 import base64
+from datetime import datetime
 import os
 import uuid as uuidlib
 
@@ -16,6 +17,7 @@ from libcloud.compute.deployment import ScriptDeployment
 
 from del8.core import data_class
 from del8.core import serialization
+from del8.core.logging import exit_logger
 from del8.core.utils import project_util
 
 
@@ -56,6 +58,7 @@ class GceParams(object):
         vast_api_key_file="~/.vast_api_key",
         supervisor_main=DEFAULT_SUPERVISOR_MAIN,
         supervisor_logs_dir="~/del8_supervisor_logs",
+        logs_bucket="del8_logs",
     ):
         self.private_ssh_key_path = os.path.expanduser(self.private_ssh_key_path)
         self.public_ssh_key_path = os.path.expanduser(self.public_ssh_key_path)
@@ -79,6 +82,23 @@ class GceParams(object):
                 "scopes": ["compute", "storage-full"],
             }
         ]
+
+
+def _get_log_object_folder():
+    # NOTE: This could lead to conflicts if launching several jobs at exactly
+    # the same time.
+    return datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+
+
+def _create_base_exit_logger_params(gce_params):
+    # NOTE: That some fields will be missing/partial and need to be
+    # filled out before they can be used on the supervisor and workers.
+    return exit_logger.ExitLoggerParams(
+        logs_dir=gce_params.supervisor_logs_dir,
+        private_key_filepath=gce_params.credentials_path,
+        log_object_name=_get_log_object_folder(),
+        logs_bucket=gce_params.logs_bucket,
+    )
 
 
 def _add_start_supervisor_script(
@@ -120,6 +140,11 @@ def launch(execution_items, executor_params, launch_params):
     # NOTE: Maybe make this include the experiment name.
     instance_name = f"del8-{uuidlib.uuid4().hex}"
 
+    if not executor_params.base_exit_logger_params:
+        executor_params = executor_params.copy(
+            base_exit_logger_params=_create_base_exit_logger_params(launch_params)
+        )
+
     script = [
         "#!/bin/bash",
         # I think we need the sudo apt-get update twice for whatever reason.
@@ -132,6 +157,10 @@ def launch(execution_items, executor_params, launch_params):
         #
         project_util.file_to_bash_command(
             launch_params.public_ssh_key_path, dst_directory="~/.ssh"
+        ),
+        project_util.file_to_bash_command(
+            launch_params.credentials_path,
+            dst_directory=os.path.dirname(launch_params.credentials_path),
         ),
         project_util.file_to_bash_command(
             launch_params.private_ssh_key_path, dst_directory="~/.ssh"

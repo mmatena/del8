@@ -58,6 +58,17 @@ def data_class():
                 kwargs.update(**attr_overrides)
                 return self.__class__(**kwargs)
 
+            def __eq__(self, other):
+                if not other or self.__class__ != other.__class__:
+                    return False
+
+                for name in self.data_class_attr_names:
+                    # NOTE: The Nones are there mostly out of paranoia.
+                    if getattr(self, name, None) != getattr(other, name, None):
+                        return False
+
+                return True
+
         return DataClass
 
     return dec

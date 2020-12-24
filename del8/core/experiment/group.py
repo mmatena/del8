@@ -1,6 +1,7 @@
 """TODO: Add title."""
 import abc
 
+from .. import serialization
 from ..utils import decorator_util as dec_util
 
 
@@ -47,6 +48,9 @@ def group(
                         raise ValueError(
                             f"Found two different experimets with same uuid {experiment.uuid}."
                         )
+
+            def as_json(self):
+                return serialization.serialize_class(self.__class__)
 
         # Return a singleton instance.
         return ExperimentGroup()

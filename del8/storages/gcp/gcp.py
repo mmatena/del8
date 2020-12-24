@@ -3,6 +3,9 @@ import contextlib
 import json
 import os
 import tempfile
+import time
+
+from absl import logging
 
 from google.cloud import storage as gcp_storage
 from google.oauth2 import service_account
@@ -11,12 +14,14 @@ import psycopg2
 from del8.core import data_class
 from del8.core import serialization
 from del8.core.di import executable
+from del8.core.experiment import runs
 from del8.core.storage import storage
+from del8.core.utils import file_util
 
 SerializationType = serialization.SerializationType
 
 
-# GROUPS_TABLE = "Groups"
+RUN_STATES_TABLE = "RunStates"
 ITEMS_TABLE = "Items"
 BLOBS_TABLE = "Blobs"
 
@@ -39,8 +44,15 @@ class GcpStorageParams(storage.StorageParams):
     ):
         pass
 
-    def instantiate_storage(self):
-        return GcpStorage.from_params(self)
+    def instantiate_storage(
+        self,
+        group=None,
+        experiment=None,
+        run_uuid=None,
+    ):
+        return GcpStorage.from_params(
+            self, group=group, experiment=experiment, run_uuid=run_uuid
+        )
 
     def get_storage_cls(self):
         return GcpStorage
@@ -74,6 +86,7 @@ class GcpStorageParams(storage.StorageParams):
         "google-cloud-storage",
         "psycopg2-binary",
     ],
+    only_wrap_methods=["params_by_environment_mode"],
 )
 class GcpStorage(storage.Storage):
     # NOTE: Going to have to do a little refactor here and probably in the general storage interface.
@@ -121,18 +134,38 @@ class GcpStorage(storage.Storage):
     #################
 
     @classmethod
-    def from_params(cls, gcp_params):
-        return GcpStorage(gcp_params)
+    def from_params(cls, gcp_params, **kwargs):
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        return GcpStorage(gcp_params, **kwargs)
 
     #################
 
     def _commit(self):
         self._conn.commit()
 
+    def _get_cursor(self, tries=5, wait_secs=3):
+        # TODO: Make the backoff, and perhaps other features, more sophisticated.
+        try:
+            c = self._conn.cursor()
+            # Make sure that we can execute commands.
+            c.execute("SELECT 1")
+            return c
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            logging.info(
+                f"Encountered exception '{e}' when connecting to Cloud SQL. Trying again."
+            )
+            if tries <= 1:
+                raise e
+            # NOTE: We assume that the connection has been closed.
+            # TODO: Check if the connection has been closed. If not, then close it.
+            time.sleep(wait_secs)
+            self._conn = self._initialize_cloud_sql()
+            return self._get_cursor(tries=tries - 1)
+
     @contextlib.contextmanager
     def _cursor(self):
         # To be used as `with self._cursor() as c: ...`
-        cursor = self._conn.cursor()
+        cursor = self._get_cursor()
         try:
             yield cursor
         finally:
@@ -252,15 +285,58 @@ class GcpStorage(storage.Storage):
 
     #################
 
-    def retrieve_items_by_class(
+    def set_run_state(self, run_state):
+        with self._cursor() as c:
+            c.execute(
+                f"INSERT INTO {RUN_STATES_TABLE} VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (run_uuid) DO UPDATE SET state = EXCLUDED.state",
+                (
+                    self.group_uuid,
+                    self.experiment_uuid,
+                    self.run_uuid,
+                    run_state,
+                ),
+            )
+
+    def get_run_state(self, run_uuid):
+        with self._cursor() as c:
+            c.execute(
+                f"SELECT state FROM {RUN_STATES_TABLE} WHERE run_uuid=%s",
+                [run_uuid],
+            )
+            row = c.fetchone()
+            if not row:
+                raise ValueError(f"Run state not found for run with uuid: {run_uuid}.")
+            (state,) = row
+            return state
+
+    #################
+
+    def _create_uuid_query_terms(
         self,
-        item_cls,
+        *,
         group_uuid=None,
         experiment_uuid=None,
         run_uuid=None,
     ):
-        # All of the uuids are optional are should restrict the returns
-        # to only items associated with the respective group/experiment/run.
+        query = []
+        bindings = []
+        if group_uuid:
+            query.append("group_uuid=%s")
+            bindings.append(group_uuid)
+        if experiment_uuid:
+            query.append("exp_uuid=%s")
+            bindings.append(experiment_uuid)
+        if run_uuid:
+            query.append("run_uuid=%s")
+            bindings.append(run_uuid)
+        query = " AND ".join(query)
+        if not query:
+            query = "TRUE"
+        bindings = tuple(bindings)
+        return query, bindings
+
+    def _create_item_cls_query_term(self, item_cls):
         cls_name = item_cls.__name__
         cls_module = item_cls.__module__
 
@@ -272,20 +348,28 @@ class GcpStorage(storage.Storage):
         json_value = {"__class__": json_value}
         json_value = json.dumps(json_value)
 
-        query = [f"SELECT data FROM {ITEMS_TABLE} WHERE data @> %s"]
-        bindings = [json_value]
-        # NOTE: There is probably someway to automate this query construction process.
-        if group_uuid:
-            query.append("AND group_uuid=%s")
-            bindings.append(group_uuid)
-        if experiment_uuid:
-            query.append("AND experiment_uuid=%s")
-            bindings.append(experiment_uuid)
-        if run_uuid:
-            query.append("AND run_uuid=%s")
-            bindings.append(run_uuid)
-        query = " ".join(query)
-        bindings = tuple(bindings)
+        term = "data @> %s"
+        bindings = (json_value,)
+
+        return term, bindings
+
+    def retrieve_items_by_class(
+        self,
+        item_cls,
+        group_uuid=None,
+        experiment_uuid=None,
+        run_uuid=None,
+    ):
+        # All of the uuids are optional are should restrict the returns
+        # to only items associated with the respective group/experiment/run.
+        cls_term, cls_bindings = self._create_item_cls_query_term(item_cls)
+        uuid_terms, uuid_bindings = self._create_uuid_query_terms(
+            group_uuid=group_uuid,
+            experiment_uuid=experiment_uuid,
+            run_uuid=run_uuid,
+        )
+        query = f"SELECT data FROM {ITEMS_TABLE} WHERE {cls_term} AND {uuid_terms}"
+        bindings = cls_bindings + uuid_bindings
 
         with self._cursor() as c:
             c.execute(query, bindings)
@@ -293,6 +377,73 @@ class GcpStorage(storage.Storage):
 
         items = [serialization.deserialize(row[0]) for row in rows]
         return items
+
+    def retrieve_single_item_by_class(
+        self,
+        item_cls,
+        group_uuid=None,
+        experiment_uuid=None,
+        run_uuid=None,
+    ):
+        items = self.retrieve_items_by_class(
+            item_cls,
+            group_uuid=group_uuid,
+            experiment_uuid=experiment_uuid,
+            run_uuid=run_uuid,
+        )
+        # NOTE: Maybe log the rest of the parameters. Log the query?
+        if not items:
+            raise ValueError(f"Unable to find an item with class {item_cls}.")
+        elif len(items) > 1:
+            raise ValueError(f"Found multiple items with class {item_cls}.")
+        return items[0]
+
+    def run_keys_from_partial_values(
+        self,
+        run_key_values,
+        group_uuid=None,
+        experiment_uuid=None,
+    ):
+        # All of the uuids are optional are should restrict the returns
+        # to only items associated with the respective group/experiment.
+        cls_term, cls_bindings = self._create_item_cls_query_term(runs.RunKey)
+        uuid_terms, uuid_bindings = self._create_uuid_query_terms(
+            group_uuid=group_uuid,
+            experiment_uuid=experiment_uuid,
+        )
+        run_key_binding = {"attributes": {"key_values": run_key_values}}
+        run_key_binding = json.dumps(run_key_binding)
+
+        query = (
+            f"SELECT data FROM {ITEMS_TABLE} WHERE "
+            f"data @> %s AND {cls_term} AND {uuid_terms}"
+        )
+        bindings = (run_key_binding,) + cls_bindings + uuid_bindings
+
+        with self._cursor() as c:
+            c.execute(query, bindings)
+            rows = c.fetchall()
+
+        items = [serialization.deserialize(row[0]) for row in rows]
+        return items
+
+    def retrieve_run_uuids(
+        self, *, group_uuid=None, experiment_uuid=None, run_state=None
+    ):
+        terms, bindings = self._create_uuid_query_terms(
+            group_uuid=group_uuid,
+            experiment_uuid=experiment_uuid,
+        )
+        if run_state is not None:
+            terms += " AND state=%s::integer"
+            bindings += (run_state,)
+
+        query = f"SELECT run_uuid FROM {RUN_STATES_TABLE} WHERE {terms}"
+        with self._cursor() as c:
+            c.execute(query, bindings)
+            rows = c.fetchall()
+
+        return [row[0] for row in rows]
 
     #################
 
@@ -322,6 +473,31 @@ class GcpStorage(storage.Storage):
                     gcp_storage_object_name,
                 ),
             )
+        # TODO: Maybe delete the GCP storage object if inserting into the
+        # database fails. Then probably re-raise the exception.
+        return blob_uuid
+
+    def store_blob_from_file(self, filepath):
+        # NOTE: ext will start with a dot if it is non-empty.
+        ext = file_util.get_file_suffix(filepath)
+        blob_uuid = self.new_uuid()
+        gcp_storage_object_name = f"{blob_uuid}{ext}"
+
+        blob = self._bucket.blob(gcp_storage_object_name)
+        blob.upload_from_filename(filepath)
+
+        with self._cursor() as c:
+            c.execute(
+                f"INSERT INTO {BLOBS_TABLE} VALUES (%s, %s, %s, %s, %s)",
+                (
+                    blob_uuid,
+                    self.group_uuid,
+                    self.experiment_uuid,
+                    self.run_uuid,
+                    gcp_storage_object_name,
+                ),
+            )
+
         # TODO: Maybe delete the GCP storage object if inserting into the
         # database fails. Then probably re-raise the exception.
         return blob_uuid

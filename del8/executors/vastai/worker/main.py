@@ -1,5 +1,6 @@
 """Main executable program for a Vast AI worker."""
 from multiprocessing import connection
+import sys
 import time
 
 from absl import app
@@ -20,16 +21,20 @@ flags.mark_flag_as_required("port")
 # NOTE: There is probably a cleaner way to do this than a
 # bunch of nested contexts and loops. Also maybe try seeing
 # if some light server framework could be used.
-def main(_):
+def main_loop():
     address = ("127.0.0.1", FLAGS.port)
     with connection.Listener(address) as listener:
         while True:
             with listener.accept() as conn:
                 while True:
+                    # Try to keep these flushed for exit logging.
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+
                     try:
                         msg = conn.recv()
                     except EOFError:
-                        logging.warning("EOFError on conn.recv()")
+                        logging.warning("[NOT FATAL] EOFError on conn.recv()")
                         break
 
                     msg = serialization.deserialize(msg)
@@ -40,8 +45,9 @@ def main(_):
                         if isinstance(exe_item, str):
                             exe_item = serialization.deserialize(exe_item)
 
-                        # TODO: Exception handling
-                        # logging.warning("Not processing anything for testing purposes. Uncomment the line.")
+                        logging.info(
+                            f"Processing execution item: {serialization.serialize(exe_item, indent=2)}"
+                        )
                         entrypoint.worker_run(**exe_item.worker_run_kwargs)
 
                         response = messages.Message(
@@ -50,17 +56,23 @@ def main(_):
                                 status=messages.ResponseStatus.SUCCESS
                             ),
                         )
+                        logging.info("Successfully processed execution item")
 
                         ser_res = serialization.serialize(response)
                         conn.send(ser_res)
 
-                    elif msg.type == messages.MessageType.KILL:
-                        return
+                    # NOTE: I don't I support this, so commenting out.
+                    # elif msg.type == messages.MessageType.KILL:
+                    #     return
 
                     else:
                         raise ValueError(
                             f"Message received with unknown type {msg.type}."
                         )
+
+
+def main(_):
+    main_loop()
 
 
 if __name__ == "__main__":

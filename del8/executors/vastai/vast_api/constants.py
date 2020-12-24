@@ -40,6 +40,7 @@ OP_NAMES = {
 
 FIELD_MULTIPLIERS = {
     "cpu_ram": 1000,
+    "gpu_ram": 1000,
     "duration": 1.0 / (24.0 * 60.0 * 60.0),
 }
 

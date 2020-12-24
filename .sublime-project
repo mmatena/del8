@@ -1,0 +1,9 @@
+{
+    "settings": {
+        "python_interpreter": "/usr/bin/python3",
+
+        // "python_package_paths": [
+        //     "$home/Desktop/projects/del8",
+        // ]
+    }
+}

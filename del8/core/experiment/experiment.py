@@ -1,7 +1,15 @@
 """TODO: Add title."""
 import abc
+import contextlib
 
+from absl import logging
+
+from del8.core.storage.storage import RunState
+from del8.executables.models import checkpoints
+
+from . import runs
 from .. import data_class
+from .. import serialization
 from ..di import dependencies
 from ..execution import executor
 from ..utils import decorator_util as dec_util
@@ -38,7 +46,7 @@ class _ExperimentABC(abc.ABC):
         raise NotImplementedError
 
 
-def experiment(
+def experiment(  # noqa: C901
     *,
     uuid,
     group,
@@ -73,11 +81,6 @@ def experiment(
     key_fields = set(key_fields)
 
     def dec(cls):
-        if not _are_keys_unique(key_fields, varying_params):
-            raise ValueError(
-                f"The key fields for {cls.__name__} do not lead to unique keys given the varying params."
-            )
-
         @dec_util.wraps_class(cls)
         class Experiment(cls, _ExperimentABC):
             def __init__(self):
@@ -103,12 +106,54 @@ def experiment(
 
                 self.storage_params = storage_params
 
-            def get_full_parameters_list(self):
+            def get_full_parameters_list(self, skip_finished=True):
                 params_cls = self.params_cls
                 params = []
-                for varying in self.varying_params:
-                    params.append(params_cls(**self.fixed_params, **varying))
+
+                varying_params = self.varying_params
+                if callable(varying_params):
+                    varying_params = varying_params(self)
+
+                if not _are_keys_unique(key_fields, varying_params):
+                    raise ValueError(
+                        f"The key fields for {cls.__name__} do not lead to unique keys given the varying params."
+                    )
+
+                for varying in varying_params:
+                    p = params_cls(**self.fixed_params, **varying)
+                    if skip_finished:
+                        finished_run_uuids = self.has_run_been_completed(p)
+                        if finished_run_uuids:
+                            run_key_values = self.create_run_key_values(p)
+                            uuids_str = ", ".join(finished_run_uuids)
+                            logging.info(
+                                f"Skipping parameters with run key {run_key_values} due to presence of "
+                                f"completed runs with uuids {{{uuids_str}}}."
+                            )
+                            continue
+                    params.append(p)
                 return params
+
+            def has_run_been_completed(self, params):
+                with self.get_storage() as storage:
+                    run_key_values = self.create_run_key_values(params)
+                    run_keys = storage.run_keys_from_partial_values(
+                        group_uuid=self.group.uuid,
+                        experiment_uuid=self.uuid,
+                        run_key_values=run_key_values,
+                    )
+                    finished_run_uuids = []
+                    for run_key in run_keys:
+                        try:
+                            run_state = storage.get_run_state(run_key.run_uuid)
+                        except ValueError:
+                            # This happens when we don't have a run-key, which
+                            # shouldn't happen now. So this is just here for back
+                            # compatability until I clean out the DB.
+                            continue
+                        if run_state == RunState.FINISHED:
+                            finished_run_uuids.append(run_key.run_uuid)
+                return finished_run_uuids
 
             def get_all_package_kwargs(self, binding_specs):
                 exe_classes = dependencies.get_all_executables_classes_in_graph(
@@ -145,8 +190,9 @@ def experiment(
                 run_kwargs = {
                     "global_binding_specs": binding_specs,
                     "storage_params": storage_params,
-                    "group_cls": self.group.__class__,
-                    "experiment_cls": self.__class__,
+                    # Note that these will be serialized as their class.
+                    "group_cls": self.group,
+                    "experiment_cls": self,
                     "run_uuid": storage_params.get_storage_cls().new_uuid(),
                     "executable_cls": self.executable_cls,
                     "init_kwargs": config.init_kwargs,
@@ -160,11 +206,48 @@ def experiment(
             def create_run_key_values(self, params):
                 return {k: getattr(params, k) for k in self.key_fields}
 
-            def create_all_execution_items(self):
+            def create_all_execution_items(self, skip_finished=True):
                 return [
                     self.create_execution_item(p)
-                    for p in self.get_full_parameters_list()
+                    for p in self.get_full_parameters_list(skip_finished=skip_finished)
                 ]
+
+            def as_json(self):
+                return serialization.serialize_class(self.__class__)
+
+            def get_storage(self):
+                storage_params = self.get_storage_params()
+                return storage_params.instantiate_storage(
+                    group=self.group, experiment=self
+                )
+
+            def retrieve_run_uuids(self, run_state=None):
+                with self.get_storage() as storage:
+                    return storage.retrieve_run_uuids(
+                        group_uuid=self.group.uuid,
+                        experiment_uuid=self.uuid,
+                        run_state=run_state,
+                    )
+
+            def retrieve_single_item_by_class(self, item_cls, run_uuid):
+                with self.get_storage() as storage:
+                    return storage.retrieve_single_item_by_class(
+                        item_cls=item_cls,
+                        group_uuid=self.group.uuid,
+                        experiment_uuid=self.uuid,
+                        run_uuid=run_uuid,
+                    )
+
+            def retrieve_run_params(self, run_uuid):
+                return self.retrieve_single_item_by_class(self.params_cls, run_uuid)
+
+            def retrieve_run_key(self, run_uuid):
+                return self.retrieve_single_item_by_class(runs.RunKey, run_uuid)
+
+            def retrieve_checkpoints_summary(self, run_uuid):
+                return self.retrieve_single_item_by_class(
+                    checkpoints.CheckpointsSummary, run_uuid
+                )
 
         # Return a singleton instance.
         exp = Experiment()

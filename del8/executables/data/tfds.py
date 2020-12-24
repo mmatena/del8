@@ -8,6 +8,7 @@ from google.oauth2 import service_account
 import tensorflow_datasets as tfds
 
 from del8.core.di import executable
+from del8.core.utils import gcp_util
 
 
 ###############################################################################
@@ -55,16 +56,7 @@ class gcp_tfds_dataset(object):
         return dataset_name.replace(":", "/")
 
     def connect_to_bucket(self, tfds_bucket, private_key_filepath):
-        private_key_filepath = os.path.expanduser(private_key_filepath)
-
-        credentials = service_account.Credentials.from_service_account_file(
-            private_key_filepath,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        client = gcp_storage.Client(
-            credentials=credentials, project=credentials.project_id
-        )
-        return client.get_bucket(tfds_bucket)
+        return gcp_util.connect_to_bucket(tfds_bucket, private_key_filepath)
 
     def call(
         self,

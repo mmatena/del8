@@ -16,6 +16,16 @@
 --     serialized jsonb NOT NULL
 -- );
 
+CREATE TABLE RunStates (
+    group_uuid char(32) NOT NULL,
+    exp_uuid   char(32) NOT NULL,
+    run_uuid   char(32) NOT NULL PRIMARY KEY,
+
+    -- Enum from storage.RunState
+    state      integer NOT NULL
+);
+
+
 CREATE TABLE Items (
     -- Recall that the `uuid` column represents the uuid of
     -- the row, NOT the run (which is represented by the

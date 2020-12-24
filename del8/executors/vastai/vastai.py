@@ -1,13 +1,17 @@
 """TODO: Add title."""
 from concurrent import futures
+import functools
 import logging as pylogging
 from multiprocessing import connection
+import os
 import queue
+import subprocess
 import time
 
 from typing import Sequence
 
 from absl import logging
+import requests
 import sshtunnel
 
 from del8.core import data_class
@@ -48,6 +52,7 @@ class VastExecutorParams(object):
         # added to some other on start command; again, it will form the entire
         # on start command.
         entire_on_start_cmd=None,
+        base_exit_logger_params=None,
     ):
         pass
 
@@ -68,7 +73,7 @@ class OfferQuery(object):
     def __init__(
         self,
         queries_str="",
-        order_str="dlperf_usd,dph",
+        order_str="dlperf_usd-",
         # TODO: Support interuptable instances.
         offer_type="on-demand",
     ):
@@ -170,6 +175,7 @@ class _WorkerStates(object):
     INITIALIZING = "INITIALIZING"
     ACCEPTING = "ACCEPTING"
     PROCESSING = "PROCESSING"
+    SHUTTING_DOWN = "SHUTTING_DOWN"
     KILLED = "KILLED"
 
 
@@ -211,37 +217,32 @@ class VastSupervisor(executor.Supervisor):
             submit_to_pool(self._launch_worker)
 
         while not_done:
-            done, not_done = futures.wait(not_done, return_when=futures.FIRST_COMPLETED)
-            # TODO: Handle failures.
-            if len(done) != 1:
-                raise Exception(
-                    # TODO: Make sure printing the items in done is clean. I don't
-                    # know what they'll look like as they are now.
-                    "Was expecting to have a single done item returned. "
-                    f"Instead we had {len(done)} items with values {done}."
-                )
-            handle = list(done)[0].result()
-            state = handle.state
+            dones, not_done = futures.wait(
+                not_done, return_when=futures.FIRST_COMPLETED
+            )
+            for done in dones:
+                handle = done.result()
+                state = handle.state
 
-            logging.info(f"Worker state: {state}")
+                logging.info(f"Worker state: {state}")
 
-            if state == _WorkerStates.INITIALIZING:
-                submit_to_pool(handle.wait_for_connection)
+                if state == _WorkerStates.INITIALIZING:
+                    submit_to_pool(handle.wait_for_connection)
 
-            elif state == _WorkerStates.ACCEPTING:
-                try:
-                    item = execution_items.get_nowait()
-                    submit_to_pool(handle.accept_item, item)
-                except queue.Empty:
-                    submit_to_pool(handle.kill)
+                elif state == _WorkerStates.ACCEPTING:
+                    try:
+                        item = execution_items.get_nowait()
+                        submit_to_pool(handle.accept_item, item)
+                    except queue.Empty:
+                        submit_to_pool(handle.kill)
 
-            elif state == _WorkerStates.KILLED:
-                continue
+                elif state == _WorkerStates.KILLED:
+                    continue
 
-            else:
-                raise Exception(
-                    f"State {state} not recognized in the supervisor for VastWorkerHandle."
-                )
+                else:
+                    raise Exception(
+                        f"State {state} not recognized in the supervisor for VastWorkerHandle."
+                    )
 
 
 class VastWorkerLauncher(executor.WorkerLauncher):
@@ -265,6 +266,14 @@ class VastWorkerLauncher(executor.WorkerLauncher):
         offer = self._offers.get_nowait()
         handle = VastWorkerHandle(vast_params=self._vast_params, offer=offer)
         return handle.start()
+
+
+# 429 Too Many Requests
+_http_429_backoff = functools.partial(
+    backoffs.linear_to_exp_backoff,
+    exceptions_to_catch=(requests.exceptions.HTTPError,),
+    should_retry_on_exception_fn=lambda e: e.response.status_code == 429,
+)
 
 
 class _ConnectFailedException(Exception):
@@ -297,17 +306,72 @@ class VastWorkerHandle(executor.WorkerHandle):
         return self
 
     def kill(self):
-        # logging.fatal("NOT KILLING WORKER FOR TESTING. UNCOMMENT ASAP.")
+        self.state = _WorkerStates.SHUTTING_DOWN
+        try:
+            self._perform_worker_exit_logging()
+        except Exception as e:
+            logging.exception(e)
+
+        # logging.error("NOT KILLING WORKER FOR TESTING. UNCOMMENT ASAP.")
+        # ACTUALLY_KILL_THE_WORKER = None
+        # self.state = _WorkerStates.KILLED
+        # return self
+
         if self._instance:
             api_wrapper.destroy_instance_by_vast_instance_id(
                 self._instance.get_instance_id()
             )
         elif self._uuid:
             api_wrapper.destroy_instance_by_uuid(self._uuid)
+
         self.state = _WorkerStates.KILLED
         logging.info("Killed worker.")
+
         return self
 
+    def _perform_worker_exit_logging(self):
+        base_exit_logger_params = self._vast_params.base_exit_logger_params
+        if not base_exit_logger_params or not self._instance:
+            return
+
+        from del8.core.logging import exit_logger
+        from del8.core.logging.print_logs import common as print_logs
+
+        remote_cmd = [
+            # NOTE: I might want to be able to configure the python path.
+            "export PYTHONPATH=$PYTHONPATH:~/del8;",
+            self._vast_params.instance_params.python_binary,
+            print_logs.MAIN,
+            f"--logs_dir={self._vast_params.instance_params.worker_logs_dir}",
+        ]
+        remote_cmd = " ".join(remote_cmd)
+
+        cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-p",
+            f"{self._instance.get_ssh_port()}",
+            f"root@{self._instance.get_ssh_host()}",
+            remote_cmd,
+        ]
+        output = subprocess.check_output(cmd)
+        logs_tar_base64 = print_logs.extract_from_stdout(output)
+
+        logger_params = base_exit_logger_params.copy(
+            log_object_name=os.path.join(
+                base_exit_logger_params.log_object_name,
+                "worker",
+                self._instance.get_uuid()[:8] + ".tar.gz",
+            )
+        )
+
+        exit_logger.log_from_base64(logger_params, logs_tar_base64)
+
+    @_http_429_backoff(
+        linear_backoff_steps=0,
+        exp_start_interval_secs=30,
+    )
     def wait_for_connection(self):
         assert self.state == _WorkerStates.INITIALIZING
         # NOTE: Not sure if this sleep is necessary.
@@ -338,7 +402,8 @@ class VastWorkerHandle(executor.WorkerHandle):
     @backoffs.linear_to_exp_backoff(
         exceptions_to_catch=(_ConnectFailedException,),
         should_retry_on_exception_fn=lambda e: isinstance(e, _ConnectFailedException),
-        linear_backoff_steps=60,
+        linear_backoff_steps=20,
+        linear_interval_secs=15,
     )
     def _connect(self):
         assert self.state == _WorkerStates.INITIALIZING
@@ -352,9 +417,8 @@ class VastWorkerHandle(executor.WorkerHandle):
             ssh_username="root",
             compression=True,
             mute_exceptions=True,
-            # NOTE: If I have issues with the connections dying, try setting
-            # the `set_keepalive` argument.
-            # set_keepalive,
+            # This is in seconds.
+            set_keepalive=60.0,
         )
 
         self._tunnel.start()
@@ -369,6 +433,7 @@ class VastWorkerHandle(executor.WorkerHandle):
     def accept_item(self, item):
         assert self.state == _WorkerStates.ACCEPTING
         assert item is not None
+
         self.state = _WorkerStates.PROCESSING
 
         msg = messages.Message(
@@ -401,5 +466,5 @@ class VastWorkerHandle(executor.WorkerHandle):
         if self._tunnel:
             self._tunnel.stop()
             self._tunnel = None
-        if self.state != _WorkerStates.KILLED:
+        if self.state not in [_WorkerStates.SHUTTING_DOWN, _WorkerStates.KILLED]:
             self.kill()

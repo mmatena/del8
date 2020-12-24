@@ -9,6 +9,10 @@ class RunKey(object):
         # `key_fields` for the particular run.
         pass
 
+    @classmethod
+    def has_same_values(cls, rk1, rk2):
+        return rk1.key_values == rk2.key_values
+
 
 @data_class.data_class()
 class RunInstanceConfig(object):
