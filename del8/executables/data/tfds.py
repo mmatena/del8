@@ -49,10 +49,6 @@ class gcp_tfds_dataset(object):
 
     def dataset_name_to_subpath(self, dataset_name):
         # NOTE: Not aggressively checking correct format.
-        if "/" not in dataset_name:
-            raise ValueError(
-                f"The tfds dataset name {dataset_name} must contain the dataset and builder config names."
-            )
         return dataset_name.replace(":", "/")
 
     def connect_to_bucket(self, tfds_bucket, private_key_filepath):
@@ -91,8 +87,10 @@ class gcp_tfds_dataset(object):
 
         bucket = self.connect_to_bucket(tfds_bucket)
 
+        prefix = name_subpath
         # NOTE: I think the prefix has to end with a slash.
-        prefix = name_subpath + "/"
+        if not prefix.endswith("/"):
+            prefix = prefix + "/"
 
         blobs = list(bucket.list_blobs(prefix=prefix))
         if not blobs:

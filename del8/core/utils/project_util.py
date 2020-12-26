@@ -7,6 +7,8 @@ import tempfile
 
 from typing import Sequence
 
+from absl import logging
+
 from del8.core import data_class
 
 
@@ -54,6 +56,8 @@ def file_to_bash_command(filepath, dst_directory="./"):
         content = f.read()
     file_content = base64.b64encode(content).decode("utf-8")
 
+    logging.info(f"{filepath} base64 has been created.")
+
     filename = os.path.basename(filepath)
     dst_file = os.path.join(dst_directory, filename)
 
@@ -82,6 +86,8 @@ def folder_to_bash_command(folder, excludes=[], unzip_directory="./"):
         with open(tmp.name, "rb") as f:
             content = f.read()
     folder_tar = base64.b64encode(content).decode("utf-8")
+
+    logging.info(f"{folder} base64 has been created.")
 
     script = [
         f"FOLDER_TAR='{folder_tar}'",

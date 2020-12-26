@@ -14,3 +14,11 @@ def adam_optimizer(learning_rate=1e-3, beta_1=0.9, beta_2=0.999, epsilon=1e-07):
     return tf.keras.optimizers.Adam(
         learning_rate, beta_1=beta_1, beta_2=beta_2, epsilon=epsilon
     )
+
+
+@executable.executable()
+def sgd(learning_rate, nesterov_momentum=None):
+    if nesterov_momentum is not None:
+        return tf.keras.optimizers.SGD(learning_rate, nesterov_momentum, nesterov=True)
+    else:
+        return tf.keras.optimizers.SGD(learning_rate)

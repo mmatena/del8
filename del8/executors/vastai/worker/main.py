@@ -7,6 +7,8 @@ from absl import app
 from absl import flags
 from absl import logging
 
+import tensorflow as tf
+
 from del8.core import serialization
 from del8.core.execution import entrypoint
 from del8.executors.vastai import messages
@@ -60,6 +62,8 @@ def main_loop():
 
                         ser_res = serialization.serialize(response)
                         conn.send(ser_res)
+
+                        tf.keras.backend.clear_session()
 
                     # NOTE: I don't I support this, so commenting out.
                     # elif msg.type == messages.MessageType.KILL:

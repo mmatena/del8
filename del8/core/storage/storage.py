@@ -111,12 +111,12 @@ class Storage(abc.ABC):
         raise NotImplementedError
 
     @contextlib.contextmanager
-    def retrieve_blob_as_tempfile(self, blob_uuid):
+    def retrieve_blob_as_tempfile(self, blob_uuid, flags="r"):
         temp_dir = tempfile.mkdtemp()
         file = None
         try:
             filepath = self.retrieve_blob_as_file(blob_uuid, temp_dir)
-            file = open(filepath, "r")
+            file = open(filepath, flags)
             yield file
         finally:
             if file:

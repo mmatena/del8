@@ -89,6 +89,7 @@ class checkpoint_saver_callback:
 def checkpoint_loader(model, checkpoint, storage):
     # TODO: Add some kwargs for the load_weights (by_name=False, skip_mismatch=False, options=None)
     # once I support "protected" bindings.
+    logging.info(f"Loading checkpoint {checkpoint}")
     with storage.retrieve_blob_as_tempfile(checkpoint) as f:
         model.load_weights(f.name)
     return model

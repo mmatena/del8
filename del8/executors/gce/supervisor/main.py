@@ -14,13 +14,13 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_string("gce_instance_name", None, "")
 flags.DEFINE_string("zone", None, "")
-flags.DEFINE_string("execution_items_base64", None, "")
-flags.DEFINE_string("executor_params_base64", None, "")
+flags.DEFINE_string("execution_items_file", None, "")
+flags.DEFINE_string("executor_params_file", None, "")
 
 flags.mark_flag_as_required("gce_instance_name")
 flags.mark_flag_as_required("zone")
-flags.mark_flag_as_required("execution_items_base64")
-flags.mark_flag_as_required("executor_params_base64")
+flags.mark_flag_as_required("execution_items_file")
+flags.mark_flag_as_required("executor_params_file")
 
 
 def exit_logging(base_exit_logger_params):
@@ -53,12 +53,10 @@ def kill_vm(exe_params):
 # bunch of nested contexts and loops. Also maybe try seeing
 # if some light server framework could be used.
 def main(_):
-    exe_items = base64.b64decode(FLAGS.execution_items_base64.encode("utf-8")).decode(
-        "utf-8"
-    )
-    exe_params = base64.b64decode(FLAGS.executor_params_base64.encode("utf-8")).decode(
-        "utf-8"
-    )
+    with open(os.path.expanduser((FLAGS.executor_params_file)), "r") as f:
+        exe_params = base64.b64decode(f.read()).decode("utf-8")
+    with open(os.path.expanduser((FLAGS.execution_items_file)), "r") as f:
+        exe_items = base64.b64decode(f.read()).decode("utf-8")
     try:
         exe_items = serialization.deserialize(exe_items)
         exe_params = serialization.deserialize(exe_params)

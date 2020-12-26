@@ -13,7 +13,7 @@ import uuid as uuidlib
 
 from libcloud.compute.types import Provider
 from libcloud.compute.providers import get_driver
-from libcloud.compute.deployment import ScriptDeployment
+from libcloud.compute.deployment import MultiStepDeployment, ScriptDeployment
 
 from del8.core import data_class
 from del8.core import serialization
@@ -127,12 +127,21 @@ def _add_start_supervisor_script(
         launch_params.supervisor_main,
         f"--gce_instance_name='{instance_name}'",
         f"--zone='{launch_params.datacenter}'",
-        f"--execution_items_base64='{execution_items}'",
-        f"--executor_params_base64='{executor_params}'",
+        "--execution_items_file=~/.execution_items",
+        "--executor_params_file=~/.execution_params",
         f"1>{stdout} 2>{stderr} &",
     ]
     cmd = " ".join(cmd)
-    script = [f"mkdir -p {logs_dir}", cmd]
+    script = [
+        f"EXE_ITEMS_B64='{execution_items}'",
+        "echo $EXE_ITEMS_B64 > ~/.execution_items",
+        #
+        f"EXE_PARAMS_B64='{executor_params}'",
+        "echo $EXE_PARAMS_B64 > ~/.execution_params",
+        #
+        f"mkdir -p {logs_dir}",
+        cmd,
+    ]
     return "\n".join(script)
 
 
@@ -176,7 +185,15 @@ def launch(execution_items, executor_params, launch_params):
             execution_items, executor_params, launch_params, instance_name=instance_name
         ),
     ]
-    deploy = ScriptDeployment("\n".join(script))
+    deploy = MultiStepDeployment(
+        [
+            # NOTE: Quick hack as otherwise the command line script becomes too long.
+            # TODO: Use libcloud.compute.deployment.FileDeployment(source, target)
+            # to get the main script there
+            ScriptDeployment("ulimit -s 65536"),
+            ScriptDeployment("\n".join(script)),
+        ]
+    )
 
     ComputeEngine = get_driver(Provider.GCE)
     driver = ComputeEngine(

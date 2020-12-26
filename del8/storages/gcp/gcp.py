@@ -2,6 +2,7 @@
 import contextlib
 import json
 import os
+import shutil
 import tempfile
 import time
 
@@ -18,12 +19,19 @@ from del8.core.experiment import runs
 from del8.core.storage import storage
 from del8.core.utils import file_util
 
+# 30 min timeout for loading from gcp.
+TIMEOUT = 30 * 60
+
 SerializationType = serialization.SerializationType
 
 
 RUN_STATES_TABLE = "RunStates"
 ITEMS_TABLE = "Items"
 BLOBS_TABLE = "Blobs"
+
+
+# Should only be set to true for debugging.
+PERSISTENT_CACHE = False
 
 
 @data_class.data_class()
@@ -41,6 +49,8 @@ class GcpStorageParams(storage.StorageParams):
         # Stuff for Cloud Storage.
         private_key_file="storage-private-key.json",
         bucket_name="del8_blobs",
+        # Stuff for caching.
+        blob_read_cache_dir="~/.del8_gcp_storage_blob_read_cache",
     ):
         pass
 
@@ -105,8 +115,13 @@ class GcpStorage(storage.Storage):
         self._run_uuid = run_uuid
         self._gcp_params = self.params_by_environment_mode(gcp_params)
 
+        self._context_depth = 0
         self._conn = None
         self._bucket = None
+
+        # Using an int instead of a bool to enable an idempotent context manager.
+        self._use_blob_read_cache_depth = 0
+        self._blob_uuid_to_name = {}
 
     def call(self):
         # NOTE: This is kind of a hack that comes from making this @executable.
@@ -225,12 +240,21 @@ class GcpStorage(storage.Storage):
         return client.get_bucket(self._gcp_params.bucket_name)
 
     def initialize(self):
-        self._conn = self._initialize_cloud_sql()
-        self._bucket = self._initialize_cloud_storage()
+        self._context_depth += 1
+
+        if not self._conn:
+            self._conn = self._initialize_cloud_sql()
+        if not self._bucket:
+            self._bucket = self._initialize_cloud_storage()
 
     def close(self):
-        if self._conn:
-            self._conn.close()
+        self._context_depth -= 1
+
+        if not self._context_depth:
+            if self._conn:
+                self._conn.close()
+            self._conn = None
+            self._bucket = None
 
     #################
 
@@ -412,7 +436,7 @@ class GcpStorage(storage.Storage):
             experiment_uuid=experiment_uuid,
         )
         run_key_binding = {"attributes": {"key_values": run_key_values}}
-        run_key_binding = json.dumps(run_key_binding)
+        run_key_binding = serialization.serialize(run_key_binding)
 
         query = (
             f"SELECT data FROM {ITEMS_TABLE} WHERE "
@@ -460,7 +484,7 @@ class GcpStorage(storage.Storage):
         with tempfile.NamedTemporaryFile(suffix=f".{extension}") as f:
             model.save_weights(f.name)
             blob = self._bucket.blob(gcp_storage_object_name)
-            blob.upload_from_filename(f.name)
+            blob.upload_from_filename(f.name, timeout=TIMEOUT)
 
         with self._cursor() as c:
             c.execute(
@@ -484,7 +508,7 @@ class GcpStorage(storage.Storage):
         gcp_storage_object_name = f"{blob_uuid}{ext}"
 
         blob = self._bucket.blob(gcp_storage_object_name)
-        blob.upload_from_filename(filepath)
+        blob.upload_from_filename(filepath, timeout=TIMEOUT)
 
         with self._cursor() as c:
             c.execute(
@@ -503,15 +527,59 @@ class GcpStorage(storage.Storage):
         return blob_uuid
 
     def retrieve_blob_as_file(self, blob_uuid, dst_dir):
+        if self._use_blob_read_cache_depth and blob_uuid in self._blob_uuid_to_name:
+            object_name = self._blob_uuid_to_name[blob_uuid]
+
+            cached_path = os.path.join(self.blob_read_cache_dir, object_name)
+
+            filename = os.path.basename(object_name)
+            filepath = os.path.join(dst_dir, filename)
+
+            if cached_path != filepath:
+                shutil.copyfile(cached_path, filepath)
+
+            return filepath
+
         object_name = self.retrieve_blob_path(blob_uuid)
+
+        if PERSISTENT_CACHE and self._use_blob_read_cache_depth:
+            cached_path = os.path.join(self.blob_read_cache_dir, object_name)
+            if os.path.exists(cached_path):
+                self._blob_uuid_to_name[blob_uuid] = object_name
+                return self.retrieve_blob_as_file(blob_uuid, dst_dir)
 
         filename = os.path.basename(object_name)
         filepath = os.path.join(dst_dir, filename)
 
         blob = self._bucket.blob(object_name)
-        blob.download_to_filename(filepath)
+        blob.download_to_filename(filepath, timeout=TIMEOUT)
+
+        if self._use_blob_read_cache_depth:
+            self._blob_uuid_to_name[blob_uuid] = object_name
+            cached_path = os.path.join(self.blob_read_cache_dir, object_name)
+            if filepath != cached_path:
+                shutil.copyfile(filepath, cached_path)
 
         return filepath
+
+    @contextlib.contextmanager
+    def retrieve_blob_as_tempfile(self, blob_uuid, flags="r"):
+        use_cache = bool(self._use_blob_read_cache_depth)
+
+        if use_cache:
+            dst_dir = self.blob_read_cache_dir
+        else:
+            dst_dir = tempfile.mkdtemp()
+        file = None
+        try:
+            filepath = self.retrieve_blob_as_file(blob_uuid, dst_dir)
+            file = open(filepath, flags)
+            yield file
+        finally:
+            if file:
+                file.close()
+            if not use_cache:
+                shutil.rmtree(dst_dir)
 
     # def store_tensors(self, tensors):
     #     """Returns UUID."""
@@ -530,3 +598,25 @@ class GcpStorage(storage.Storage):
             if not row:
                 raise ValueError(f"Blob with uuid {blob_uuid} not found.")
             return row[0]
+
+    #################
+
+    @property
+    def blob_read_cache_dir(self):
+        return os.path.expanduser(self._gcp_params.blob_read_cache_dir)
+
+    @contextlib.contextmanager
+    def blob_read_cache(self):
+        if not self._use_blob_read_cache_depth:
+            self._blob_uuid_to_name = {}
+            if not os.path.isdir(self.blob_read_cache_dir):
+                os.mkdir(self.blob_read_cache_dir)
+
+        self._use_blob_read_cache_depth += 1
+        try:
+            yield
+        finally:
+            self._use_blob_read_cache_depth -= 1
+            if not self._use_blob_read_cache_depth and not PERSISTENT_CACHE:
+                self._blob_uuid_to_name = {}
+                shutil.rmtree(self.blob_read_cache_dir)

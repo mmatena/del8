@@ -21,3 +21,8 @@ def ensure_iterable(possible_iterable):
         return possible_iterable
     else:
         return [possible_iterable]
+
+
+class hashabledict(dict):
+    def __hash__(self):
+        return hash((frozenset(self.keys()), frozenset(self.values())))

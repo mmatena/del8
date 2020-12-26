@@ -28,7 +28,10 @@ def _are_keys_unique(key_fields, varying_params):
         p_key_val = []
         for k in key_fields:
             if k in p:
-                p_key_val.append(p[k])
+                v = p[k]
+                if isinstance(v, dict):
+                    v = type_util.hashabledict(v)
+                p_key_val.append(v)
         values.append(tuple(p_key_val))
     return len(values) == len(set(values))
 
@@ -106,32 +109,35 @@ def experiment(  # noqa: C901
 
                 self.storage_params = storage_params
 
+                self._storage = None
+
             def get_full_parameters_list(self, skip_finished=True):
                 params_cls = self.params_cls
                 params = []
 
-                varying_params = self.varying_params
-                if callable(varying_params):
-                    varying_params = varying_params(self)
+                with self.get_storage():
+                    varying_params = self.varying_params
+                    if callable(varying_params):
+                        varying_params = varying_params(self)
 
-                if not _are_keys_unique(key_fields, varying_params):
-                    raise ValueError(
-                        f"The key fields for {cls.__name__} do not lead to unique keys given the varying params."
-                    )
+                    if not _are_keys_unique(key_fields, varying_params):
+                        raise ValueError(
+                            f"The key fields for {cls.__name__} do not lead to unique keys given the varying params."
+                        )
 
-                for varying in varying_params:
-                    p = params_cls(**self.fixed_params, **varying)
-                    if skip_finished:
-                        finished_run_uuids = self.has_run_been_completed(p)
-                        if finished_run_uuids:
-                            run_key_values = self.create_run_key_values(p)
-                            uuids_str = ", ".join(finished_run_uuids)
-                            logging.info(
-                                f"Skipping parameters with run key {run_key_values} due to presence of "
-                                f"completed runs with uuids {{{uuids_str}}}."
-                            )
-                            continue
-                    params.append(p)
+                    for varying in varying_params:
+                        p = params_cls(**self.fixed_params, **varying)
+                        if skip_finished:
+                            finished_run_uuids = self.has_run_been_completed(p)
+                            if finished_run_uuids:
+                                run_key_values = self.create_run_key_values(p)
+                                uuids_str = ", ".join(finished_run_uuids)
+                                logging.info(
+                                    f"Skipping parameters with run key {run_key_values} due to presence of "
+                                    f"completed runs with uuids {{{uuids_str}}}."
+                                )
+                                continue
+                        params.append(p)
                 return params
 
             def has_run_been_completed(self, params):
@@ -216,10 +222,12 @@ def experiment(  # noqa: C901
                 return serialization.serialize_class(self.__class__)
 
             def get_storage(self):
-                storage_params = self.get_storage_params()
-                return storage_params.instantiate_storage(
-                    group=self.group, experiment=self
-                )
+                if not self._storage:
+                    storage_params = self.get_storage_params()
+                    self._storage = storage_params.instantiate_storage(
+                        group=self.group, experiment=self
+                    )
+                return self._storage
 
             def retrieve_run_uuids(self, run_state=None):
                 with self.get_storage() as storage:
@@ -232,6 +240,15 @@ def experiment(  # noqa: C901
             def retrieve_single_item_by_class(self, item_cls, run_uuid):
                 with self.get_storage() as storage:
                     return storage.retrieve_single_item_by_class(
+                        item_cls=item_cls,
+                        group_uuid=self.group.uuid,
+                        experiment_uuid=self.uuid,
+                        run_uuid=run_uuid,
+                    )
+
+            def retrieve_items_by_class(self, item_cls, run_uuid):
+                with self.get_storage() as storage:
+                    return storage.retrieve_items_by_class(
                         item_cls=item_cls,
                         group_uuid=self.group.uuid,
                         experiment_uuid=self.uuid,

@@ -69,6 +69,12 @@ def data_class():
 
                 return True
 
+            def __hash__(self):
+                # NOTE: Technically a hash. Not a good one though.
+                # NOTE: I'm not really sure how this plays with mutable data classes,
+                # which probably are not going to be supported in the first place.
+                return 0
+
         return DataClass
 
     return dec
