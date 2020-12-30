@@ -1,5 +1,6 @@
 """TODO: Add title."""
 from concurrent import futures
+import datetime
 import functools
 import logging as pylogging
 from multiprocessing import connection
@@ -189,8 +190,8 @@ class VastSupervisor(executor.Supervisor):
         return cls(executor_params)
 
     def initialize(self):
-        # NOTE: I chose the 2 pretty arbitarily here.
-        max_pool_workers = round(2 * self._vast_params.num_workers)
+        # NOTE: I chose the 8 pretty arbitarily here.
+        max_pool_workers = round(8 * self._vast_params.num_workers)
         self._pool = futures.ThreadPoolExecutor(max_workers=max_pool_workers)
         self._worker_handles = set()
         self._worker_launcher.prepare_for_launches()
@@ -217,11 +218,16 @@ class VastSupervisor(executor.Supervisor):
             submit_to_pool(self._launch_worker)
 
         while not_done:
+            logging.info("Waiting for a future to complete.")
             dones, not_done = futures.wait(
                 not_done, return_when=futures.FIRST_COMPLETED
             )
             for done in dones:
-                handle = done.result()
+                try:
+                    handle = done.result(1)
+                except futures.TimeoutError as e:
+                    logging.exception(e)
+                    raise e
                 state = handle.state
 
                 logging.info(f"Worker state: {state}")
@@ -311,11 +317,6 @@ class VastWorkerHandle(executor.WorkerHandle):
             self._perform_worker_exit_logging()
         except Exception as e:
             logging.exception(e)
-
-        # logging.error("NOT KILLING WORKER FOR TESTING. UNCOMMENT ASAP.")
-        # ACTUALLY_KILL_THE_WORKER = None
-        # self.state = _WorkerStates.KILLED
-        # return self
 
         if self._instance:
             api_wrapper.destroy_instance_by_vast_instance_id(
@@ -416,9 +417,12 @@ class VastWorkerHandle(executor.WorkerHandle):
             remote_bind_address=("127.0.0.1", remote_port),
             ssh_username="root",
             compression=True,
+            #
+            # mute_exceptions=False,
             mute_exceptions=True,
+            #
             # This is in seconds.
-            set_keepalive=60.0,
+            set_keepalive=15.0,
         )
 
         self._tunnel.start()
@@ -442,9 +446,26 @@ class VastWorkerHandle(executor.WorkerHandle):
         )
 
         ser_msg = serialization.serialize(msg)
+        logging.info(f"Sending execution item to worker {self._uuid}.")
+        start_time = time.time()
         self._conn.send(ser_msg)
 
-        response = self._conn.recv()
+        try:
+            response = self._conn.recv()
+        except EOFError as e:
+            logging.error(
+                f"Worker {self._uuid} received EOFError. Instance {self._instance._json}."
+            )
+            logging.exception(e)
+            self.kill()
+            return self
+
+        elapsed_seconds = time.time() - start_time
+        elapsed_nice = str(datetime.timedelta(seconds=elapsed_seconds))
+
+        logging.info(f"Received response from worker {self._uuid}.")
+        # Elapsed will be formated as "hh:mm:ss.fractions".
+        logging.info(f"The worker processed the item in {elapsed_nice}.")
         response = serialization.deserialize(response)
 
         if response.content.status != messages.ResponseStatus.SUCCESS:

@@ -10,6 +10,7 @@ from absl import logging
 
 from google.cloud import storage as gcp_storage
 from google.oauth2 import service_account
+import requests
 import psycopg2
 
 from del8.core import data_class
@@ -17,6 +18,7 @@ from del8.core import serialization
 from del8.core.di import executable
 from del8.core.experiment import runs
 from del8.core.storage import storage
+from del8.core.utils import backoffs
 from del8.core.utils import file_util
 
 # 30 min timeout for loading from gcp.
@@ -471,6 +473,12 @@ class GcpStorage(storage.Storage):
 
     #################
 
+    @backoffs.linear_to_exp_backoff(
+        exceptions_to_catch=[requests.exceptions.ReadTimeout]
+    )
+    def _upload_file(self, blob, filename):
+        blob.upload_from_filename(filename, timeout=TIMEOUT)
+
     def store_model_weights(self, model):
         """Returns UUID."""
         blob_uuid = self.new_uuid()
@@ -484,7 +492,7 @@ class GcpStorage(storage.Storage):
         with tempfile.NamedTemporaryFile(suffix=f".{extension}") as f:
             model.save_weights(f.name)
             blob = self._bucket.blob(gcp_storage_object_name)
-            blob.upload_from_filename(f.name, timeout=TIMEOUT)
+            self._upload_file(blob, f.name)
 
         with self._cursor() as c:
             c.execute(
@@ -526,8 +534,11 @@ class GcpStorage(storage.Storage):
         # database fails. Then probably re-raise the exception.
         return blob_uuid
 
+    def _should_cache_blobs(self):
+        return bool(PERSISTENT_CACHE or self._use_blob_read_cache_depth)
+
     def retrieve_blob_as_file(self, blob_uuid, dst_dir):
-        if self._use_blob_read_cache_depth and blob_uuid in self._blob_uuid_to_name:
+        if self._should_cache_blobs() and blob_uuid in self._blob_uuid_to_name:
             object_name = self._blob_uuid_to_name[blob_uuid]
 
             cached_path = os.path.join(self.blob_read_cache_dir, object_name)
@@ -542,7 +553,7 @@ class GcpStorage(storage.Storage):
 
         object_name = self.retrieve_blob_path(blob_uuid)
 
-        if PERSISTENT_CACHE and self._use_blob_read_cache_depth:
+        if PERSISTENT_CACHE:
             cached_path = os.path.join(self.blob_read_cache_dir, object_name)
             if os.path.exists(cached_path):
                 self._blob_uuid_to_name[blob_uuid] = object_name
@@ -554,7 +565,7 @@ class GcpStorage(storage.Storage):
         blob = self._bucket.blob(object_name)
         blob.download_to_filename(filepath, timeout=TIMEOUT)
 
-        if self._use_blob_read_cache_depth:
+        if self._should_cache_blobs():
             self._blob_uuid_to_name[blob_uuid] = object_name
             cached_path = os.path.join(self.blob_read_cache_dir, object_name)
             if filepath != cached_path:

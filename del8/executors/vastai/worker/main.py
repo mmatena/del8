@@ -34,6 +34,7 @@ def main_loop():
                     sys.stderr.flush()
 
                     try:
+                        logging.info("Waiting for message from supervisor.")
                         msg = conn.recv()
                     except EOFError:
                         logging.warning("[NOT FATAL] EOFError on conn.recv()")
@@ -61,8 +62,10 @@ def main_loop():
                         logging.info("Successfully processed execution item")
 
                         ser_res = serialization.serialize(response)
+                        logging.info("Sending response to supervisor.")
                         conn.send(ser_res)
 
+                        logging.info("Clearing keras session.")
                         tf.keras.backend.clear_session()
 
                     # NOTE: I don't I support this, so commenting out.

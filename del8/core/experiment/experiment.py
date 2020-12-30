@@ -116,9 +116,9 @@ def experiment(  # noqa: C901
                 params = []
 
                 with self.get_storage():
+                    if callable(self.varying_params):
+                        self.varying_params = self.varying_params(self)
                     varying_params = self.varying_params
-                    if callable(varying_params):
-                        varying_params = varying_params(self)
 
                     if not _are_keys_unique(key_fields, varying_params):
                         raise ValueError(

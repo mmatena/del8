@@ -21,8 +21,11 @@ class tfds_dataset(object):
         dataset_name,
         split,
         tfds_dir=None,
+        tfds_try_gcs=False,
     ):
-        return tfds.load(dataset_name, split=split, data_dir=tfds_dir)
+        return tfds.load(
+            dataset_name, split=split, data_dir=tfds_dir, try_gcs=tfds_try_gcs
+        )
 
 
 ###############################################################################
@@ -66,7 +69,8 @@ class gcp_tfds_dataset(object):
         # NOTE: That the split argument does not affect what is downloaded from gcp.
         if not download_all_records:
             raise NotImplementedError(
-                "TODO: Support downloading tfrecords as needed. Bested suited for large datasets."
+                "TODO: Support downloading tfrecords as needed. Bested suited for large datasets. "
+                "Try to use the regular `tfds_dataset` executable with the `tfds_try_gcs=True` flag."
             )
 
         name_subpath = self.dataset_name_to_subpath(dataset_name)
