@@ -35,6 +35,7 @@ def worker_run(
     init_kwargs=None,
     call_kwargs=None,
     run_uuid=None,
+    preload_blob_uuids=None,
     # The run_params are used purely for storage at the start of the experiment
     # and do not affect any execution.
     run_params=None,
@@ -64,6 +65,10 @@ def worker_run(
 
     with scopes.binding_scope(total_global_binding_specs):
         with storage_params.instantiate_storage() as storage:
+
+            if preload_blob_uuids and storage.can_preload_blobs():
+                storage.preload_blobs(preload_blob_uuids)
+
             # NOTE: I might want to avoid injecting storage directly and instead mediate
             # interactions with storage via injected instances of ExperimentGroup, Experiment,
             # and Procedure.

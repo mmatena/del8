@@ -21,6 +21,7 @@ from del8.core.storage import storage
 from del8.core.utils import backoffs
 from del8.core.utils import file_util
 
+
 # 30 min timeout for loading from gcp.
 TIMEOUT = 30 * 60
 
@@ -53,6 +54,7 @@ class GcpStorageParams(storage.StorageParams):
         bucket_name="del8_blobs",
         # Stuff for caching.
         blob_read_cache_dir="~/.del8_gcp_storage_blob_read_cache",
+        preloading_params=None,
     ):
         pass
 
@@ -120,6 +122,8 @@ class GcpStorage(storage.Storage):
         self._context_depth = 0
         self._conn = None
         self._bucket = None
+
+        self._preloader = None
 
         # Using an int instead of a bool to enable an idempotent context manager.
         self._use_blob_read_cache_depth = 0
@@ -230,7 +234,7 @@ class GcpStorage(storage.Storage):
         args = " ".join(args)
         return psycopg2.connect(args)
 
-    def _initialize_cloud_storage(self):
+    def get_bucket_from_new_client(self):
         key_path = self._gcp_params.get_private_key_file()
         credentials = service_account.Credentials.from_service_account_file(
             key_path,
@@ -241,6 +245,9 @@ class GcpStorage(storage.Storage):
         )
         return client.get_bucket(self._gcp_params.bucket_name)
 
+    def _initialize_cloud_storage(self):
+        return self.get_bucket_from_new_client()
+
     def initialize(self):
         self._context_depth += 1
 
@@ -248,6 +255,11 @@ class GcpStorage(storage.Storage):
             self._conn = self._initialize_cloud_sql()
         if not self._bucket:
             self._bucket = self._initialize_cloud_storage()
+        if not self._preloader and self.can_preload_blobs():
+            self._preloader = self._gcp_params.preloading_params.instantiate_preloader(
+                self
+            )
+            self._preloader.initialize()
 
     def close(self):
         self._context_depth -= 1
@@ -255,8 +267,11 @@ class GcpStorage(storage.Storage):
         if not self._context_depth:
             if self._conn:
                 self._conn.close()
+            if self._preloader:
+                self._preloader.close()
             self._conn = None
             self._bucket = None
+            self._preloader = None
 
     #################
 
@@ -271,6 +286,14 @@ class GcpStorage(storage.Storage):
     @property
     def group_uuid(self):
         return self._group.uuid
+
+    #################
+
+    def can_preload_blobs(self):
+        return bool(self._gcp_params.preloading_params)
+
+    def preload_blobs(self, blob_uuids):
+        self._preloader.preload_blobs(blob_uuids)
 
     #################
 
@@ -430,6 +453,8 @@ class GcpStorage(storage.Storage):
         group_uuid=None,
         experiment_uuid=None,
     ):
+        # NOTE: This probably does not work well with arrays.
+
         # All of the uuids are optional are should restrict the returns
         # to only items associated with the respective group/experiment.
         cls_term, cls_bindings = self._create_item_cls_query_term(runs.RunKey)
@@ -537,6 +562,9 @@ class GcpStorage(storage.Storage):
     def _should_cache_blobs(self):
         return bool(PERSISTENT_CACHE or self._use_blob_read_cache_depth)
 
+    def _is_blob_preloaded(self, blob_uuid):
+        return bool(self._preloader and self._preloader.has_blob(blob_uuid))
+
     def retrieve_blob_as_file(self, blob_uuid, dst_dir):
         if self._should_cache_blobs() and blob_uuid in self._blob_uuid_to_name:
             object_name = self._blob_uuid_to_name[blob_uuid]
@@ -551,7 +579,18 @@ class GcpStorage(storage.Storage):
 
             return filepath
 
-        object_name = self.retrieve_blob_path(blob_uuid)
+        elif self._is_blob_preloaded(blob_uuid):
+            preloaded_path = self._preloader.get_blob_filepath(blob_uuid)
+
+            filename = os.path.basename(preloaded_path)
+            filepath = os.path.join(dst_dir, filename)
+
+            if preloaded_path != filepath:
+                shutil.copyfile(preloaded_path, filepath)
+
+            return filepath
+
+        object_name = self.retrieve_blob_name(blob_uuid)
 
         if PERSISTENT_CACHE:
             cached_path = os.path.join(self.blob_read_cache_dir, object_name)
@@ -599,7 +638,7 @@ class GcpStorage(storage.Storage):
     #     # Maybe try something like an h5 file for storing structs of tensors.
     #     raise NotImplementedError("TODO")
 
-    def retrieve_blob_path(self, blob_uuid):
+    def retrieve_blob_name(self, blob_uuid):
         with self._cursor() as c:
             c.execute(
                 f"SELECT gcp_storage_object_name FROM {BLOBS_TABLE} WHERE uuid=%s",
@@ -609,6 +648,18 @@ class GcpStorage(storage.Storage):
             if not row:
                 raise ValueError(f"Blob with uuid {blob_uuid} not found.")
             return row[0]
+
+    def retrieve_blob_names(self, blob_uuids):
+        if not blob_uuids:
+            return {}
+
+        with self._cursor() as c:
+            c.execute(
+                f"SELECT uuid, gcp_storage_object_name FROM {BLOBS_TABLE} WHERE uuid IN %s",
+                (tuple(blob_uuids),),
+            )
+            uuid_to_name = {r[0]: r[1] for r in c.fetchall()}
+        return uuid_to_name
 
     #################
 

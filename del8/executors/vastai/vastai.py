@@ -212,6 +212,8 @@ class VastSupervisor(executor.Supervisor):
         def submit_to_pool(fn, *args, **kwargs):
             not_done.add(self._pool.submit(fn, *args, **kwargs))
 
+        total_exe_items = len(execution_items)
+
         execution_items = _list_to_queue(execution_items)
 
         for _ in range(self._vast_params.num_workers):
@@ -238,7 +240,11 @@ class VastSupervisor(executor.Supervisor):
                 elif state == _WorkerStates.ACCEPTING:
                     try:
                         item = execution_items.get_nowait()
+                        remaining = execution_items.qsize()
                         submit_to_pool(handle.accept_item, item)
+                        logging.info(
+                            f"Approximately {remaining} out of {total_exe_items} execution items remaining."
+                        )
                     except queue.Empty:
                         submit_to_pool(handle.kill)
 

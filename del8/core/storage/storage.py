@@ -102,7 +102,7 @@ class Storage(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def retrieve_blob_path(self, blob_uuid):
+    def retrieve_blob_name(self, blob_uuid):
         raise NotImplementedError
 
     @abc.abstractmethod

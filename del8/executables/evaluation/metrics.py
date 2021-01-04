@@ -4,6 +4,9 @@ A lot stuff here taken from t5 at:
 https://github.com/google-research/text-to-text-transfer-transformer/blob/master/t5/evaluation/metrics.py
 """
 import functools
+import time
+
+from absl import logging
 
 import numpy as np
 import scipy.stats

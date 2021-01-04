@@ -4,6 +4,7 @@ import contextlib
 
 from absl import logging
 
+from del8.core.di import scopes
 from del8.core.storage.storage import RunState
 from del8.executables.models import checkpoints
 
@@ -31,6 +32,8 @@ def _are_keys_unique(key_fields, varying_params):
                 v = p[k]
                 if isinstance(v, dict):
                     v = type_util.hashabledict(v)
+                elif isinstance(v, list):
+                    v = tuple(v)
                 p_key_val.append(v)
         values.append(tuple(p_key_val))
     return len(values) == len(set(values))
@@ -47,6 +50,13 @@ class _ExperimentABC(abc.ABC):
     @abc.abstractmethod
     def create_run_instance_config(self, params):
         raise NotImplementedError
+
+    def create_preload_blob_uuids(self, params):
+        return None
+
+
+def is_experiment(obj):
+    return isinstance(obj, _ExperimentABC)
 
 
 def experiment(  # noqa: C901
@@ -88,6 +98,7 @@ def experiment(  # noqa: C901
         class Experiment(cls, _ExperimentABC):
             def __init__(self):
                 self.uuid = uuid
+                self._true_uuid = uuid
 
                 self.name = name
                 self.description = description
@@ -203,6 +214,7 @@ def experiment(  # noqa: C901
                     "executable_cls": self.executable_cls,
                     "init_kwargs": config.init_kwargs,
                     "call_kwargs": config.call_kwargs,
+                    "preload_blob_uuids": self.create_preload_blob_uuids(params),
                     "run_params": params,
                 }
                 return executor.ExecutionItem(
@@ -266,9 +278,26 @@ def experiment(  # noqa: C901
                     checkpoints.CheckpointsSummary, run_uuid
                 )
 
+            def to_dev_mode(self):
+                prefix = "__dev__"
+                self.uuid = prefix + self._true_uuid[: -len(prefix)]
+
         # Return a singleton instance.
         exp = Experiment()
         group.add_experiment(exp)
         return exp
+
+    return dec
+
+
+def with_experiment_storages():
+    def dec(fn):
+        def inner(*args, **kwargs):
+            all_args = list(args) + list(kwargs.values())
+            storages = [arg.get_storage() for arg in all_args if is_experiment(arg)]
+            with scopes.multiple(*storages):
+                return fn(*args, **kwargs)
+
+        return inner
 
     return dec
