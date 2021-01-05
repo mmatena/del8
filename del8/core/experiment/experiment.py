@@ -278,6 +278,14 @@ def experiment(  # noqa: C901
                     checkpoints.CheckpointsSummary, run_uuid
                 )
 
+            def retrieve_all_items(self, run_uuid=None):
+                with self.get_storage() as storage:
+                    return storage.retrieve_all_items(
+                        group_uuid=self.group.uuid,
+                        experiment_uuid=self.uuid,
+                        run_uuid=run_uuid,
+                    )
+
             def to_dev_mode(self):
                 prefix = "__dev__"
                 self.uuid = prefix + self._true_uuid[: -len(prefix)]

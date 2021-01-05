@@ -496,10 +496,32 @@ class GcpStorage(storage.Storage):
 
         return [row[0] for row in rows]
 
+    def retrieve_all_items(
+        self, *, group_uuid=None, experiment_uuid=None, run_uuid=None
+    ):
+        uuid_terms, uuid_bindings = self._create_uuid_query_terms(
+            group_uuid=group_uuid,
+            experiment_uuid=experiment_uuid,
+            run_uuid=run_uuid,
+        )
+        query = f"SELECT uuid, data FROM {ITEMS_TABLE} WHERE {uuid_terms}"
+        bindings = uuid_bindings
+
+        with self._cursor() as c:
+            c.execute(query, bindings)
+            rows = c.fetchall()
+
+        items = {row[0]: serialization.deserialize(row[1]) for row in rows}
+        return items
+
     #################
 
     @backoffs.linear_to_exp_backoff(
-        exceptions_to_catch=[requests.exceptions.ReadTimeout]
+        exceptions_to_catch=[
+            requests.exceptions.ReadTimeout,
+            # NOTE: We might have to do something more if we get a ConnectionError.
+            requests.exceptions.ConnectionError,
+        ]
     )
     def _upload_file(self, blob, filename):
         blob.upload_from_filename(filename, timeout=TIMEOUT)
