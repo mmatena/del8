@@ -11,6 +11,8 @@ from datetime import datetime
 import os
 import uuid as uuidlib
 
+from absl import logging
+
 from libcloud.compute.types import Provider
 from libcloud.compute.providers import get_driver
 from libcloud.compute.deployment import MultiStepDeployment, ScriptDeployment
@@ -187,12 +189,9 @@ def launch(execution_items, executor_params, launch_params):
     ]
     deploy = MultiStepDeployment(
         [
-            # NOTE: Quick hack as otherwise the command line script becomes too long.
-            # TODO: Use libcloud.compute.deployment.FileDeployment(source, target)
-            # to get the main script there
             ScriptDeployment("ulimit -s 65536"),
             ScriptDeployment("\n".join(script)),
-        ]
+        ],
     )
 
     ComputeEngine = get_driver(Provider.GCE)
@@ -203,9 +202,18 @@ def launch(execution_items, executor_params, launch_params):
         project=launch_params.project_id,
     )
 
-    image = [
-        im for im in driver.list_images() if "ubuntu" in im.name and "focal" in im.name
-    ][0]
+    images = driver.list_images()
+    image = None
+    for name in ["focal", "bionic", "xenial"]:
+        valid_images = [im for im in images if "ubuntu" in im.name and name in im.name]
+        if valid_images:
+            image = valid_images[0]
+            logging.info(f"Using image {image.name} for GCE supervisor.")
+            break
+    if not image:
+        raise ValueError(
+            f"Unable to find valid GCE image out of options: {[im.name for im in images]}"
+        )
 
     # f1-micro
     size = [s for s in driver.list_sizes() if s.name == "e2-micro"][0]
