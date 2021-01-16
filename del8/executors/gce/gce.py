@@ -28,6 +28,7 @@ SUPERVISOR_PIP_PACKAGES = [
     "absl-py",
     "google-auth",
     "google-cloud-storage",
+    "overload==1.1",
     "pinject",
     "psycopg2-binary",
     "requests",

@@ -34,16 +34,20 @@ class ProjectParams(object):
         return os.path.basename(source_dir)
 
 
+def python_project_to_pythonpath_command(project_params):
+    source_name = project_params.get_folder_name()
+    return f"export PYTHONPATH=$PYTHONPATH:~/{source_name}"
+
+
 def python_project_to_bash_command(project_params):
     # NOTE: This assumes that we have a top-level python project and wish
     # to add it to the path.
     source_dir = project_params.folder_path
-    source_name = project_params.get_folder_name()
     excludes = project_params.get_excludes()
 
     script = [
         folder_to_bash_command(source_dir, excludes=excludes),
-        f"export PYTHONPATH=$PYTHONPATH:~/{source_name}",
+        python_project_to_pythonpath_command(project_params),
     ]
 
     return "\n".join(script)

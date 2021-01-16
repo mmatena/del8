@@ -104,6 +104,10 @@ class training_run(object):
 
         with scopes.binding_by_name_scope("model", compiled_model):
             fit_kwargs = _fit_kwargs()
+
+            # # NOTE: This can be uncommented to assist with debugging.
+            # compiled_model.run_eagerly = True
+
             history = compiled_model.fit(
                 train_ds, validation_data=validation_ds, **fit_kwargs
             )

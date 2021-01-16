@@ -23,6 +23,21 @@ def ensure_iterable(possible_iterable):
         return [possible_iterable]
 
 
+def _ensure_hashable(x):
+    if isinstance(x, list):
+        return tuple(x)
+    return x
+
+
 class hashabledict(dict):
     def __hash__(self):
-        return hash((frozenset(self.keys()), frozenset(self.values())))
+        return hash(
+            (
+                frozenset(_ensure_hashable(k) for k in self.keys()),
+                frozenset(_ensure_hashable(v) for v in self.values()),
+            )
+        )
+
+
+def get_args(generic_type):
+    return generic_type.__args__

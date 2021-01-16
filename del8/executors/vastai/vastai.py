@@ -120,8 +120,11 @@ class InstanceParams(object):
 ###############################################################################
 
 
-def create_supervisor_params(experiment, *, num_workers, offer_query, disk_gb):
-    execution_items = experiment.create_all_execution_items()
+def create_supervisor_params(
+    experiment, execution_items=None, *, num_workers, offer_query, disk_gb
+):
+    if execution_items is None:
+        execution_items = experiment.create_all_execution_items()
 
     all_binding_specs = set()
     for exe_item in execution_items:
@@ -375,11 +378,21 @@ class VastWorkerHandle(executor.WorkerHandle):
 
         exit_logger.log_from_base64(logger_params, logs_tar_base64)
 
+    def wait_for_connection(self):
+        try:
+            return self._wait_for_connection()
+        except _ConnectFailedException as e:
+            logging.error(
+                f"Worker {self._uuid} failed to connect. Instance {self._instance._json}."
+            )
+            logging.exception(e)
+            return self.kill()
+
     @_http_429_backoff(
         linear_backoff_steps=0,
         exp_start_interval_secs=30,
     )
-    def wait_for_connection(self):
+    def _wait_for_connection(self):
         assert self.state == _WorkerStates.INITIALIZING
         # NOTE: Not sure if this sleep is necessary.
         time.sleep(5)
@@ -463,8 +476,7 @@ class VastWorkerHandle(executor.WorkerHandle):
                 f"Worker {self._uuid} received EOFError. Instance {self._instance._json}."
             )
             logging.exception(e)
-            self.kill()
-            return self
+            return self.kill()
 
         elapsed_seconds = time.time() - start_time
         elapsed_nice = str(datetime.timedelta(seconds=elapsed_seconds))

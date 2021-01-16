@@ -36,6 +36,7 @@ def main_loop():
                     try:
                         logging.info("Waiting for message from supervisor.")
                         msg = conn.recv()
+                        logging.info("Message received.")
                     except EOFError:
                         logging.warning("[NOT FATAL] EOFError on conn.recv()")
                         break

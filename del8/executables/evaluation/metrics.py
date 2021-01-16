@@ -55,21 +55,30 @@ def accuracy(targets, predictions):
 @_to_numpy
 def pearson_corrcoef(targets, predictions):
     """Pearson correlation coefficient."""
-    return 100 * scipy.stats.pearsonr(targets, predictions)[0]
+    ret = 100 * scipy.stats.pearsonr(targets, predictions)[0]
+    if np.isnan(ret):
+        ret = 0.0
+    return ret
 
 
 @_return_dict("spearman_corrcoef")
 @_to_numpy
 def spearman_corrcoef(targets, predictions):
     """Spearman correlation coefficient."""
-    return 100 * scipy.stats.spearmanr(targets, predictions)[0]
+    ret = 100 * scipy.stats.spearmanr(targets, predictions)[0]
+    if np.isnan(ret):
+        ret = 0.0
+    return ret
 
 
 @_return_dict("matthews_corrcoef")
 @_to_numpy
 def matthews_corrcoef(targets, predictions):
     """Spearman correlation coefficient."""
-    return 100 * sklearn.metrics.matthews_corrcoef(targets, predictions)
+    ret = 100 * sklearn.metrics.matthews_corrcoef(targets, predictions)
+    if np.isnan(ret):
+        ret = 0.0
+    return ret
 
 
 @_return_dict("f1")
@@ -88,3 +97,13 @@ def f1_score_with_invalid(targets, predictions):
     # For any prediction != 0 or 1, set it to the opposite of what the target is
     predictions[invalid_idx_mask] = 1 - targets[invalid_idx_mask]
     return 100 * sklearn.metrics.f1_score(targets, predictions)
+
+
+@_return_dict("f1")
+@_to_numpy
+def f1(targets, predictions, average="binary"):
+    return 100 * sklearn.metrics.f1_score(targets, predictions, average=average)
+
+
+micro_f1 = functools.partial(f1, average="micro")
+macro_f1 = functools.partial(f1, average="macro")

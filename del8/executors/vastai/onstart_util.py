@@ -46,7 +46,7 @@ def create_onstart_cmd(vast_params):
 
     pip = instance_params.pip_binary
 
-    script = ["#!/bin/bash"]
+    script = ["#!/bin/bash", "touch ~/.no_auto_tmux"]
 
     # apt-get stuff
     script.append("apt-get update")

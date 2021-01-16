@@ -18,6 +18,7 @@ from del8.core import serialization
 from del8.core.di import executable
 from del8.core.experiment import runs
 from del8.core.storage import storage
+from del8.core.storage import storage_data as sd
 from del8.core.utils import backoffs
 from del8.core.utils import file_util
 
@@ -370,15 +371,21 @@ class GcpStorage(storage.Storage):
     ):
         query = []
         bindings = []
-        if group_uuid:
-            query.append("group_uuid=%s")
-            bindings.append(group_uuid)
-        if experiment_uuid:
-            query.append("exp_uuid=%s")
-            bindings.append(experiment_uuid)
-        if run_uuid:
-            query.append("run_uuid=%s")
-            bindings.append(run_uuid)
+
+        def add_binding(col, value):
+            if value is None:
+                return
+            elif isinstance(value, str):
+                query.append(f"{col}=%s")
+                bindings.append(value)
+            else:
+                query.append(f"{col} IN %s")
+                bindings.append(tuple(value))
+
+        add_binding("group_uuid", group_uuid)
+        add_binding("exp_uuid", experiment_uuid)
+        add_binding("run_uuid", run_uuid)
+
         query = " AND ".join(query)
         if not query:
             query = "TRUE"
@@ -514,6 +521,72 @@ class GcpStorage(storage.Storage):
         items = {row[0]: serialization.deserialize(row[1]) for row in rows}
         return items
 
+    def retrieve_storage_data(
+        self, *, group_uuid=None, experiment_uuid=None, run_uuid=None
+    ):
+        # NOTE: I can probably make this method faster by multithreading the queries.
+        terms, bindings = self._create_uuid_query_terms(
+            group_uuid=group_uuid,
+            experiment_uuid=experiment_uuid,
+            run_uuid=run_uuid,
+        )
+
+        query_pattern = f"SELECT group_uuid, exp_uuid, run_uuid, {{extra_cols}} FROM {{table}} WHERE {terms}"
+
+        items_query = query_pattern.format(extra_cols="uuid, data", table=ITEMS_TABLE)
+        blobs_query = query_pattern.format(
+            extra_cols="uuid, gcp_storage_object_name", table=BLOBS_TABLE
+        )
+        run_states_query = query_pattern.format(
+            extra_cols="state", table=RUN_STATES_TABLE
+        )
+
+        # Items
+        with self._cursor() as c:
+            c.execute(items_query, bindings)
+            rows = c.fetchall()
+        items = [
+            sd.Item(
+                group_uuid=row[0],
+                exp_uuid=row[1],
+                run_uuid=row[2],
+                uuid=row[3],
+                item=serialization.deserialize(row[4]),
+            )
+            for row in rows
+        ]
+
+        # Blobs
+        with self._cursor() as c:
+            c.execute(blobs_query, bindings)
+            rows = c.fetchall()
+        blobs = [
+            sd.Blob(
+                group_uuid=row[0],
+                exp_uuid=row[1],
+                run_uuid=row[2],
+                uuid=row[3],
+                blob_name=row[4],
+            )
+            for row in rows
+        ]
+
+        # Run states
+        with self._cursor() as c:
+            c.execute(run_states_query, bindings)
+            rows = c.fetchall()
+        run_states = [
+            sd.RunState(
+                group_uuid=row[0],
+                exp_uuid=row[1],
+                run_uuid=row[2],
+                state=row[3],
+            )
+            for row in rows
+        ]
+
+        return sd.Data.create_base(items=items, blobs=blobs, run_states=run_states)
+
     #################
 
     @backoffs.linear_to_exp_backoff(
@@ -521,6 +594,7 @@ class GcpStorage(storage.Storage):
             requests.exceptions.ReadTimeout,
             # NOTE: We might have to do something more if we get a ConnectionError.
             requests.exceptions.ConnectionError,
+            ConnectionResetError,
         ]
     )
     def _upload_file(self, blob, filename):

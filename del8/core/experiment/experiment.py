@@ -1,11 +1,13 @@
 """TODO: Add title."""
 import abc
+import collections
 import contextlib
 
 from absl import logging
 
 from del8.core.di import scopes
 from del8.core.storage.storage import RunState
+from del8.core.utils.type_util import hashabledict
 from del8.executables.models import checkpoints
 
 from . import runs
@@ -120,6 +122,7 @@ def experiment(  # noqa: C901
 
                 self.storage_params = storage_params
 
+                self.no_gcs_connect = False
                 self._storage = None
 
             def get_full_parameters_list(self, skip_finished=True):
@@ -136,41 +139,48 @@ def experiment(  # noqa: C901
                             f"The key fields for {cls.__name__} do not lead to unique keys given the varying params."
                         )
 
+                    run_key_to_finished_run_uuids = (
+                        self.get_finished_run_keys_to_uuids()
+                    )
+
                     for varying in varying_params:
                         p = params_cls(**self.fixed_params, **varying)
                         if skip_finished:
-                            finished_run_uuids = self.has_run_been_completed(p)
-                            if finished_run_uuids:
-                                run_key_values = self.create_run_key_values(p)
+                            key = self.create_run_key_values(p)
+                            key = hashabledict(key)
+                            if key in run_key_to_finished_run_uuids:
+                                finished_run_uuids = run_key_to_finished_run_uuids[key]
                                 uuids_str = ", ".join(finished_run_uuids)
                                 logging.info(
-                                    f"Skipping parameters with run key {run_key_values} due to presence of "
-                                    f"completed runs with uuids {{{uuids_str}}}."
+                                    f"Skipping parameters with run key {key} due to presence of "
+                                    f"finished runs with uuids {{{uuids_str}}}."
                                 )
                                 continue
+
                         params.append(p)
+
                 return params
 
-            def has_run_been_completed(self, params):
-                with self.get_storage() as storage:
-                    run_key_values = self.create_run_key_values(params)
-                    run_keys = storage.run_keys_from_partial_values(
-                        group_uuid=self.group.uuid,
-                        experiment_uuid=self.uuid,
-                        run_key_values=run_key_values,
+            def get_finished_run_keys_to_uuids(self, storage_data=None):
+                if storage_data is None:
+                    storage_data = self.get_storage().retrieve_storage_data(
+                        experiment_uuid=[self.uuid]
                     )
-                    finished_run_uuids = []
-                    for run_key in run_keys:
-                        try:
-                            run_state = storage.get_run_state(run_key.run_uuid)
-                        except ValueError:
-                            # This happens when we don't have a run-key, which
-                            # shouldn't happen now. So this is just here for back
-                            # compatability until I clean out the DB.
-                            continue
-                        if run_state == RunState.FINISHED:
-                            finished_run_uuids.append(run_key.run_uuid)
-                return finished_run_uuids
+
+                run_key_to_finished_run_uuids = collections.defaultdict(list)
+
+                finished_run_ids = storage_data.get_finished_runs_ids(
+                    experiment_uuid=self.uuid
+                )
+                for run_id in finished_run_ids:
+                    merge_run = storage_data.get_run_data(run_id)
+                    params = merge_run.get_single_item_by_class(self.params_cls)
+
+                    key = self.create_run_key_values(params)
+                    key = hashabledict(key)
+                    run_key_to_finished_run_uuids[key].append(run_id)
+
+                return run_key_to_finished_run_uuids
 
             def get_all_package_kwargs(self, binding_specs):
                 exe_classes = dependencies.get_all_executables_classes_in_graph(
@@ -239,6 +249,10 @@ def experiment(  # noqa: C901
                     self._storage = storage_params.instantiate_storage(
                         group=self.group, experiment=self
                     )
+                # NOTE: Need to do this hack as connecting to GCS with the UNC
+                # VPN hangs forever.
+                if self.no_gcs_connect:
+                    self._storage._bucket = "HACK"
                 return self._storage
 
             def retrieve_run_uuids(self, run_state=None):
