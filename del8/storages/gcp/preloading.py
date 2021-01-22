@@ -154,7 +154,11 @@ class GcpPreloader(object):
         for uuid in difference:
             filepath = self.get_blob_filepath(uuid)
             del self._blob_uuid_to_filename[uuid]
-            os.remove(filepath)
+            try:
+                os.remove(filepath)
+            except FileNotFoundError:
+                # Already deleted.
+                pass
         return difference
 
     def _retrieve_blob_names(self, blob_uuids):

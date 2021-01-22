@@ -86,10 +86,12 @@ class checkpoint_saver_callback:
 
 
 @executable.executable()
-def checkpoint_loader(model, checkpoint, storage):
+def checkpoint_loader(
+    model, checkpoint, storage, load_checkpoint_weights_by_name=False
+):
     # TODO: Add some kwargs for the load_weights (by_name=False, skip_mismatch=False, options=None)
     # once I support "protected" bindings.
     logging.info(f"Loading checkpoint {checkpoint}")
     with storage.retrieve_blob_as_tempfile(checkpoint) as f:
-        model.load_weights(f.name)
+        model.load_weights(f.name, by_name=load_checkpoint_weights_by_name)
     return model
