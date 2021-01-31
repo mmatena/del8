@@ -34,7 +34,7 @@ def worker_run(
     executable_cls,
     init_kwargs=None,
     call_kwargs=None,
-    run_uuid=None,
+    # run_uuid=None,
     preload_blob_uuids=None,
     # The run_params are used purely for storage at the start of the experiment
     # and do not affect any execution.
@@ -47,8 +47,9 @@ def worker_run(
     if not call_kwargs:
         call_kwargs = {}
 
-    if not run_uuid:
-        run_uuid = storage_params.get_storage_cls().new_uuid()
+    # if not run_uuid:
+    #     run_uuid = storage_params.get_storage_cls().new_uuid()
+    run_uuid = storage_params.get_storage_cls().new_uuid()
 
     # Due to the class decorators returning an instance, we should not
     # call these.

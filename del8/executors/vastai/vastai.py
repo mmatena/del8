@@ -121,7 +121,13 @@ class InstanceParams(object):
 
 
 def create_supervisor_params(
-    experiment, execution_items=None, *, num_workers, offer_query, disk_gb
+    experiment,
+    execution_items=None,
+    *,
+    num_workers,
+    offer_query,
+    disk_gb,
+    **extra_instance_params,
 ):
     if execution_items is None:
         execution_items = experiment.create_all_execution_items()
@@ -142,6 +148,7 @@ def create_supervisor_params(
             disk_gb=disk_gb,
             project_params=experiment.get_all_project_params(),
             **experiment.get_all_package_kwargs(all_binding_specs),
+            **extra_instance_params,
         ),
     )
 
@@ -186,7 +193,8 @@ class _WorkerStates(object):
 class VastSupervisor(executor.Supervisor):
     def __init__(self, vast_params):
         self._vast_params = vast_params
-        self._worker_launcher = VastWorkerLauncher(vast_params)
+        self._worker_launcher = VastWorkerLauncher(vast_params, self)
+        self._execution_items = None
 
     @classmethod
     def from_params(cls, executor_params):
@@ -197,6 +205,7 @@ class VastSupervisor(executor.Supervisor):
         max_pool_workers = round(8 * self._vast_params.num_workers)
         self._pool = futures.ThreadPoolExecutor(max_workers=max_pool_workers)
         self._worker_handles = set()
+        self._failed_items = set()
         self._worker_launcher.prepare_for_launches()
 
     def close(self):
@@ -218,6 +227,7 @@ class VastSupervisor(executor.Supervisor):
         total_exe_items = len(execution_items)
 
         execution_items = _list_to_queue(execution_items)
+        self._execution_items = execution_items
 
         for _ in range(self._vast_params.num_workers):
             submit_to_pool(self._launch_worker)
@@ -259,14 +269,26 @@ class VastSupervisor(executor.Supervisor):
                         f"State {state} not recognized in the supervisor for VastWorkerHandle."
                     )
 
+    def handle_failed_item(self, item):
+        # Assume if an item fails twice, then the item is bad. Won't always be
+        # true but an OK heuristic.
+        if item not in self._failed_items:
+            self._failed_items.add(item)
+            self._execution_items.put_nowait(item)
+            logging.info("Processing item failed. Adding back to queue.")
+        else:
+            logging.info("Processing item failed twice. Not retrying.")
+
 
 class VastWorkerLauncher(executor.WorkerLauncher):
     def __init__(
         self,
         vast_params,
+        supervisor,
     ):
         self._vast_params = vast_params
         self._offers = None
+        self._supervisor = supervisor
 
     def prepare_for_launches(self):
         offers = api_wrapper.query_offers(self._vast_params)
@@ -279,7 +301,9 @@ class VastWorkerLauncher(executor.WorkerLauncher):
             # TODO: Add some configuration on what to do in this case.
             raise Exception("Ran out of Vast AI offers when trying to create workers.")
         offer = self._offers.get_nowait()
-        handle = VastWorkerHandle(vast_params=self._vast_params, offer=offer)
+        handle = VastWorkerHandle(
+            vast_params=self._vast_params, offer=offer, supervisor=self._supervisor
+        )
         return handle.start()
 
 
@@ -296,9 +320,10 @@ class _ConnectFailedException(Exception):
 
 
 class VastWorkerHandle(executor.WorkerHandle):
-    def __init__(self, vast_params, offer):
+    def __init__(self, vast_params, offer, supervisor):
         self._vast_params = vast_params
         self._offer = offer
+        self._supervisor = supervisor
 
         self._uuid = None
         self._instance = None
@@ -476,6 +501,7 @@ class VastWorkerHandle(executor.WorkerHandle):
                 f"Worker {self._uuid} received EOFError. Instance {self._instance._json}."
             )
             logging.exception(e)
+            self._supervisor.handle_failed_item(item)
             return self.kill()
 
         elapsed_seconds = time.time() - start_time

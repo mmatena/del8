@@ -107,3 +107,25 @@ def f1(targets, predictions, average="binary"):
 
 micro_f1 = functools.partial(f1, average="micro")
 macro_f1 = functools.partial(f1, average="macro")
+
+
+@_return_dict("macro_f1_1")
+@_to_numpy
+def macro_f1_1(targets, predictions):
+    precision, recall, _, _ = sklearn.metrics.precision_recall_fscore_support(
+        targets, predictions
+    )
+    f1 = 2 * (precision * recall) / (precision + recall)
+    f1 = 100 * np.mean(f1)
+    return 0.0 if np.isnan(f1) else f1
+
+
+@_return_dict("macro_f1_2")
+@_to_numpy
+def macro_f1_2(targets, predictions):
+    precision, recall, _, _ = sklearn.metrics.precision_recall_fscore_support(
+        targets, predictions, average="macro"
+    )
+    f1 = 2 * (precision * recall) / (precision + recall)
+    f1 = 100 * f1
+    return 0.0 if np.isnan(f1) else f1

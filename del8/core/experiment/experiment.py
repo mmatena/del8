@@ -147,13 +147,18 @@ def experiment(  # noqa: C901
                         p = params_cls(**self.fixed_params, **varying)
                         if skip_finished:
                             key = self.create_run_key_values(p)
-                            key = hashabledict(key)
+                            key = serialization.serialize(key)
+                            # key = hashabledict(key)
+
                             if key in run_key_to_finished_run_uuids:
                                 finished_run_uuids = run_key_to_finished_run_uuids[key]
                                 uuids_str = ", ".join(finished_run_uuids)
+
+                                # print(finished_run_uuids[0], p.num_examples)
+
                                 logging.info(
-                                    f"Skipping parameters with run key {key} due to presence of "
-                                    f"finished runs with uuids {{{uuids_str}}}."
+                                    f"Skipping parameters with run key {serialization.deserialize(key)} "
+                                    f"due to presence of finished runs with uuids {{{uuids_str}}}."
                                 )
                                 continue
 
@@ -177,7 +182,9 @@ def experiment(  # noqa: C901
                     params = merge_run.get_single_item_by_class(self.params_cls)
 
                     key = self.create_run_key_values(params)
-                    key = hashabledict(key)
+                    key = serialization.serialize(key)
+                    # key = hashabledict(key)
+
                     run_key_to_finished_run_uuids[key].append(run_id)
 
                 return run_key_to_finished_run_uuids
@@ -220,7 +227,7 @@ def experiment(  # noqa: C901
                     # Note that these will be serialized as their class.
                     "group_cls": self.group,
                     "experiment_cls": self,
-                    "run_uuid": storage_params.get_storage_cls().new_uuid(),
+                    # "run_uuid": storage_params.get_storage_cls().new_uuid(),
                     "executable_cls": self.executable_cls,
                     "init_kwargs": config.init_kwargs,
                     "call_kwargs": config.call_kwargs,

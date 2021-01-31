@@ -49,15 +49,7 @@ def evaluate_model(
 def _get_task_logits(compute_task_logits, dataset, task, num_classes):
     task_logits = []
     for minibatch, _ in dataset:
-
-        start_time = time.time()
-
         logits = compute_task_logits(minibatch, task, training=False)
-
-        elapsed_seconds = time.time() - start_time
-        elapsed_nice = str(datetime.timedelta(seconds=elapsed_seconds))
-        logging.info(f"Minibatch eval took {elapsed_nice}")
-
         task_logits.append(logits)
     return tf.concat(task_logits, axis=0)
 

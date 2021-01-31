@@ -89,3 +89,26 @@ def _serialize_json_handler(obj):
 
 def serialize(obj, **kwargs):
     return json.dumps(obj, default=_serialize_json_handler, sort_keys=True, **kwargs)
+
+
+def to_pretty_json(obj):
+    # Probably not the right place for this, but what'cha gonna do?
+    root_jason = json.loads(serialize(obj))
+
+    def inner(jason):
+        if isinstance(jason, dict):
+            if "__type__" in jason:
+                dtype = jason["__type__"]
+                if dtype == SerializationType.CLASS_OBJECT:
+                    module = jason["module"]
+                    name = jason["name"]
+                    return f"{module}.{name}"
+                elif dtype == SerializationType.DATA_CLASS:
+                    jason = jason["attributes"]
+            return {k: inner(v) for k, v in jason.items()}
+        elif isinstance(jason, list):
+            return [inner(v) for v in jason]
+        else:
+            return jason
+
+    return inner(root_jason)
