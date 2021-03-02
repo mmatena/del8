@@ -1,6 +1,7 @@
 """TODO: Add title."""
 import h5py
 
+import numpy as np
 import tensorflow as tf
 
 _LIST_GROUP_NAME = "__list__"
@@ -44,3 +45,25 @@ def load_variables_from_hdf5(filepath, trainable=None):
             var = tf.Variable(ds, name=ds.attrs["name"], trainable=tr)
             variables.append(var)
         return variables
+
+
+def save_np_dict_to_hdf5(np_dict, filepath):
+    with h5py.File(filepath, "w") as f:
+        for key, val in np_dict.items():
+            # Do this to handle scalars.
+            val = np.array(val)
+            ds = f.create_dataset(key, val.shape, dtype=val.dtype)
+            # NOTE: Code modified from a section of tf source code here.
+            if not val.shape:
+                # scalar
+                ds[()] = val
+            else:
+                ds[:] = val
+
+
+def load_np_dict_from_hdf5(filepath):
+    ret = {}
+    with h5py.File(filepath, "r") as f:
+        for key in f.keys():
+            ret[key] = np.array(f[key])
+    return ret

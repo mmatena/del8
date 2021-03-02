@@ -153,7 +153,9 @@ def create_supervisor_params(
     )
 
 
-def launch_experiment(experiment, *, num_workers, offer_query, disk_gb):
+def launch_experiment(
+    experiment, *, num_workers, offer_query, disk_gb, **extra_instance_params
+):
     execution_items = experiment.create_all_execution_items()
 
     vast_params = create_supervisor_params(
@@ -161,6 +163,7 @@ def launch_experiment(experiment, *, num_workers, offer_query, disk_gb):
         num_workers=num_workers,
         offer_query=offer_query,
         disk_gb=disk_gb,
+        **extra_instance_params,
     )
 
     sup = VastSupervisor.from_params(vast_params)

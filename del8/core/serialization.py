@@ -4,6 +4,15 @@ import json
 from pydoc import locate
 
 
+_LOCATE_CACHE = {}
+
+
+def _cached_locate(path):
+    if path not in _LOCATE_CACHE:
+        _LOCATE_CACHE[path] = locate(path)
+    return _LOCATE_CACHE[path]
+
+
 class SerializationType(object):
     CLASS_OBJECT = "CLASS_OBJECT"
     DATA_CLASS = "DATA_CLASS"
@@ -23,7 +32,8 @@ def deserialize_class(serialized_class):
     module = serialized_class["module"]
     name = serialized_class["name"]
     path = f"{module}.{name}"
-    return locate(path)
+    # return locate(path)
+    return _cached_locate(path)
 
 
 def _process_attrs(klass, serialized_attrs):

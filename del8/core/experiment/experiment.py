@@ -125,6 +125,8 @@ def experiment(  # noqa: C901
                 self.no_gcs_connect = False
                 self._storage = None
 
+                self._dev_params_overrides = None
+
             def get_full_parameters_list(self, skip_finished=True):
                 params_cls = self.params_cls
                 params = []
@@ -144,7 +146,18 @@ def experiment(  # noqa: C901
                     )
 
                     for varying in varying_params:
-                        p = params_cls(**self.fixed_params, **varying)
+                        if self._dev_params_overrides:
+                            assert not (
+                                set(self.fixed_params.keys()) & set(varying.keys())
+                            )
+                            p_kwargs = {}
+                            p_kwargs.update(self.fixed_params)
+                            p_kwargs.update(varying)
+                            p_kwargs.update(self._dev_params_overrides)
+                            p = params_cls(**p_kwargs)
+                        else:
+                            p = params_cls(**self.fixed_params, **varying)
+
                         if skip_finished:
                             key = self.create_run_key_values(p)
                             key = serialization.serialize(key)
@@ -307,9 +320,10 @@ def experiment(  # noqa: C901
                         run_uuid=run_uuid,
                     )
 
-            def to_dev_mode(self):
+            def to_dev_mode(self, param_overrides=None):
                 prefix = "__dev__"
                 self.uuid = prefix + self._true_uuid[: -len(prefix)]
+                self._dev_params_overrides = param_overrides
 
         # Return a singleton instance.
         exp = Experiment()
